@@ -48,6 +48,11 @@ export const MINIMAX_MODELS = [
     deprecated: false,
   },
   {
+    id: 'MiniMax-M3',
+    label: 'MiniMax-M3',
+    deprecated: false,
+  },
+  {
     id: 'MiniMax-M1',
     label: 'MiniMax-M1',
     deprecated: false,
