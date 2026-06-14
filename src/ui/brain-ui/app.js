@@ -14,8 +14,8 @@ import { attachJarvisFx, isFxEnabledForVoice, setFxEnabledForVoice, getJarvisFxP
 renderBrainUiApp(document.body);
 const THEME_KEY = "jarvis-brain-ui-theme";
 const PHYSICS_STORAGE_KEY = "jarvis-brain-ui-physics";
-const ACTIVATION_WARMUP_KEY = "bailongma_activation_warmup_until";
-const UI_ZOOM_STORAGE_KEY = "bailongma_ui_zoom_factor";
+const ACTIVATION_WARMUP_KEY = "jarvis_activation_warmup_until";
+const UI_ZOOM_STORAGE_KEY = "jarvis_ui_zoom_factor";
 const MAX_CHAT_HISTORY = 60;
 const DEFAULT_AGENT_NAME = "小白龙";
 const DEFAULT_UI_ZOOM = 1.1;
@@ -23,7 +23,7 @@ const MIN_UI_ZOOM = 0.8;
 const MAX_UI_ZOOM = 1.8;
 const UI_ZOOM_STEP = 0.1;
 const UI_ZOOM_WHEEL_STEP = 0.05;
-const MEMORY_GRAPH_STORAGE_KEY = "bailongma-memory-graph-enabled";
+const MEMORY_GRAPH_STORAGE_KEY = "jarvis-memory-graph-enabled";
 const MEMORY_GRAPH_ENABLED = localStorage.getItem(MEMORY_GRAPH_STORAGE_KEY) !== "false";
 
 const themeSwitcher = document.getElementById("theme-switcher");
@@ -42,8 +42,8 @@ const focusBlockEl = document.getElementById("focus-block");
 const focusStackEl = document.getElementById("focus-stack");
 const focusDepthEl = document.getElementById("focus-depth");
 
-const IGNORED_VERSION_KEY = "bailongma_ignored_update_version";
-const SUPPRESS_UPDATES_KEY = "bailongma_suppress_update_notifications";
+const IGNORED_VERSION_KEY = "jarvis_ignored_update_version";
+const SUPPRESS_UPDATES_KEY = "jarvis_suppress_update_notifications";
 
 let agentName = DEFAULT_AGENT_NAME;
 let currentUiZoom = DEFAULT_UI_ZOOM;
@@ -82,7 +82,7 @@ function applyUiZoom(factor, { persist = true } = {}) {
   const nextZoom = clampZoomFactor(factor);
   currentUiZoom = nextZoom;
 
-  const bridge = window.bailongma;
+  const bridge = window.jarvis;
   if (bridge?.isElectron && typeof bridge.setZoomFactor === "function") {
     bridge.setZoomFactor(nextZoom);
   } else {
@@ -98,7 +98,7 @@ function stepUiZoom(delta) {
 }
 
 function initUiZoom() {
-  const bridge = window.bailongma;
+  const bridge = window.jarvis;
   const initialZoom = loadSavedUiZoom();
 
   if (!bridge?.isElectron) {
@@ -1451,10 +1451,10 @@ function handle({ type, data = {} }) {
       setAgentName(data.name);
       break;
     case "media_mode":
-      window.dispatchEvent(new CustomEvent("bailongma:media", { detail: data }));
+      window.dispatchEvent(new CustomEvent("jarvis:media", { detail: data }));
       break;
     case "aivideo_mode":
-      window.dispatchEvent(new CustomEvent("bailongma:aivideo", { detail: data }));
+      window.dispatchEvent(new CustomEvent("jarvis:aivideo", { detail: data }));
       break;
     case "hotspot_mode":
       setHotspotMode(!!data.active || data.action === "show" || data.action === "open", { source: "agent_event" });
@@ -1469,7 +1469,7 @@ function handle({ type, data = {} }) {
       setPersonCardMode(!!data.active || data.action === "show" || data.action === "open" || data.action === "update", { source: "agent_event", card: data.card || null });
       break;
     case "social_status":
-      window.dispatchEvent(new CustomEvent("bailongma:social_status", { detail: data }));
+      window.dispatchEvent(new CustomEvent("jarvis:social_status", { detail: data }));
       break;
     case "show_wechat_popup":
       showWechatPopup();
@@ -1599,7 +1599,7 @@ let liveTurnSpeak = false;
 
 // 流式语音合成：边下边播，首包到达即出声（后端 /tts/stream 本就分块返回，
 // 这里用 MediaSource 消费，省去"等整段下载完再播"的延迟）。默认开启，可在设置关闭。
-const TTS_STREAMING_KEY = 'bailongma.tts.streaming';
+const TTS_STREAMING_KEY = 'jarvis.tts.streaming';
 function isTTSStreamingEnabled() {
   try { return localStorage.getItem(TTS_STREAMING_KEY) !== '0'; } catch { return true; } // 默认开启
 }
@@ -1724,7 +1724,7 @@ function startTTSAudio(audioEl, revokeUrl, opts = {}) {
   audioEl.volume = 1.0; // ensure full volume (avoid residual duck state from previous play)
   attachJarvisFx(audioEl, activeTTSVoiceId); // 仅当该音色开启了机器人音效才叠加；否则原生播放
   // Suspend cloud ASR but keep the mic hardware open for interruption detection
-  if (manageMic) window.bailongmaVoice?.suspendForTTS?.();
+  if (manageMic) window.jarvisVoice?.suspendForTTS?.();
   // 结束/出错收尾。注意：被新一轮播放替换掉的旧元素，其 onerror 可能在 pause/revoke 后迟到触发；
   // 此时全局已指向新元素，必须用 ttsAudioEl===audioEl 守卫，否则会误杀新播放的流读取器和状态。
   const finish = () => {
@@ -1734,14 +1734,14 @@ function startTTSAudio(audioEl, revokeUrl, opts = {}) {
     ttsAudioEl = null;
     if (onComplete) { onComplete(); return; } // 队列段：交回队列推进，麦克风/收尾由队列统一管
     ttsCurrentText = '';
-    if (manageMic) window.bailongmaVoice?.resumeAfterMedia();
+    if (manageMic) window.jarvisVoice?.resumeAfterMedia();
   };
   audioEl.onended = finish;
   audioEl.onerror = finish;
   audioEl.play().catch(() => {
     if (ttsAudioEl !== audioEl) return;
     if (onComplete) { ttsAudioEl = null; onComplete(); return; }
-    if (manageMic) window.bailongmaVoice?.resumeAfterMedia();
+    if (manageMic) window.jarvisVoice?.resumeAfterMedia();
   });
 }
 
@@ -1807,7 +1807,7 @@ async function playTTSReply(text) {
     }
   } catch {
     ttsCurrentText = '';
-    window.bailongmaVoice?.resumeAfterMedia();
+    window.jarvisVoice?.resumeAfterMedia();
   }
 }
 
@@ -1888,7 +1888,7 @@ async function pumpSttsQueue() {
   sttsPlaying = true;
   sttsCurSeg = seg;
   // 麦克风只在首段挂起一次（后续段之间保持挂起，避免反复重置 bargein 缓冲/预热计时）
-  if (!sttsMicSuspended) { sttsMicSuspended = true; window.bailongmaVoice?.suspendForTTS?.(); }
+  if (!sttsMicSuspended) { sttsMicSuspended = true; window.jarvisVoice?.suspendForTTS?.(); }
   const onComplete = () => {
     sttsSpoken += seg;
     sttsCurSeg = '';
@@ -1929,7 +1929,7 @@ function finalizeStreamingTTS() {
 function endStreamingTTS() {
   sttsActive = false;
   ttsStreamingMode = false;
-  if (sttsMicSuspended) { sttsMicSuspended = false; window.bailongmaVoice?.resumeAfterMedia(); }
+  if (sttsMicSuspended) { sttsMicSuspended = false; window.jarvisVoice?.resumeAfterMedia(); }
   sttsQueue = []; sttsBuf = ''; sttsCurSeg = ''; sttsSpoken = ''; sttsPlaying = false;
 }
 
@@ -2713,11 +2713,11 @@ function initTTSSettings() {
     });
   }
 
-  const VOICE_LANG_KEY       = "bailongma-voice-lang";
-  const VOICE_AUTO_SEND_KEY  = "bailongma-voice-auto-send";
-  const VOICE_AUTO_MIC_KEY   = "bailongma-voice-auto-mic";
-  const VOICE_THRESHOLD_KEY  = "bailongma-voice-threshold";
-  const VOICE_PROVIDER_KEY   = "bailongma-voice-provider";
+  const VOICE_LANG_KEY       = "jarvis-voice-lang";
+  const VOICE_AUTO_SEND_KEY  = "jarvis-voice-auto-send";
+  const VOICE_AUTO_MIC_KEY   = "jarvis-voice-auto-mic";
+  const VOICE_THRESHOLD_KEY  = "jarvis-voice-threshold";
+  const VOICE_PROVIDER_KEY   = "jarvis-voice-provider";
 
   function applyVoiceProviderUI(provider) {
     const panels = {
@@ -2826,7 +2826,7 @@ function initTTSSettings() {
       localStorage.setItem(VOICE_THRESHOLD_KEY,  String(threshold));
       localStorage.setItem(VOICE_PROVIDER_KEY,   provider);
 
-      window.dispatchEvent(new CustomEvent("bailongma:voice-threshold", { detail: { threshold } }));
+      window.dispatchEvent(new CustomEvent("jarvis:voice-threshold", { detail: { threshold } }));
 
       const body = { voiceProvider: provider };
       const aliyunKey = document.getElementById("voice-aliyun-key")?.value?.trim();
@@ -3096,7 +3096,7 @@ function initTTSSettings() {
     }
   });
 
-  window.addEventListener("bailongma:social_status", (e) => {
+  window.addEventListener("jarvis:social_status", (e) => {
     const d = e.detail;
     if (d?.platform !== "wechat-clawbot") return;
     if (d.status === "connected") {
@@ -3162,7 +3162,7 @@ function initTTSSettings() {
 
   async function loadUpdateSettings() {
     syncUpdateSettings();
-    const bridge = window.bailongma;
+    const bridge = window.jarvis;
     if (!bridge?.isElectron) {
       if (settingsCurrentVersion) settingsCurrentVersion.textContent = "仅桌面端可用";
       if (settingsCheckUpdateBtn) settingsCheckUpdateBtn.disabled = true;
@@ -3234,7 +3234,7 @@ function initTTSSettings() {
   });
 
   settingsCheckUpdateBtn?.addEventListener("click", async () => {
-    const bridge = window.bailongma;
+    const bridge = window.jarvis;
     if (!bridge?.isElectron) return;
     setUpdateStatusText("正在检查更新…", "checking");
     setUpdateFeedback("");
@@ -3252,7 +3252,7 @@ function initTTSSettings() {
   });
 
   settingsDownloadUpdateBtn?.addEventListener("click", async () => {
-    const bridge = window.bailongma;
+    const bridge = window.jarvis;
     if (!bridge?.isElectron) return;
     setUpdateStatusText("开始下载…", "downloading");
     showUpdateButtons({ check: false });
@@ -3265,7 +3265,7 @@ function initTTSSettings() {
   });
 
   settingsInstallUpdateBtn?.addEventListener("click", () => {
-    window.bailongma?.quitAndInstall?.();
+    window.jarvis?.quitAndInstall?.();
   });
 
   settingsIgnoreUpdateBtn?.addEventListener("click", () => {
@@ -3288,9 +3288,9 @@ initVoicePanel({
   getChatInput:  () => document.getElementById("msg-input"),
   getSendBtn:    () => document.getElementById("send-btn"),
   getSendMessage: (options) => chat?.send?.(options),
-  getLang:       () => localStorage.getItem("bailongma-voice-lang") || "zh-CN",
-  getAutoSend:   () => localStorage.getItem("bailongma-voice-auto-send") !== "false",
-  getAutoMic:    () => localStorage.getItem("bailongma-voice-auto-mic") === "true",
+  getLang:       () => localStorage.getItem("jarvis-voice-lang") || "zh-CN",
+  getAutoSend:   () => localStorage.getItem("jarvis-voice-auto-send") !== "false",
+  getAutoMic:    () => localStorage.getItem("jarvis-voice-auto-mic") === "true",
 });
 
 // ── Hotspot mode ──
@@ -3412,7 +3412,7 @@ initWorldcup().catch((err) => console.warn('[Worldcup] init failed:', err));
     videoBtn?.classList.toggle("active", videoActive);
     if (videoActive) moveVoicePanelToBody();
     else restoreVoicePanel();
-    window.dispatchEvent(new CustomEvent("bailongma:video-mode", {
+    window.dispatchEvent(new CustomEvent("jarvis:video-mode", {
       detail: { active: videoActive, kind: videoKind },
     }));
   }
@@ -3716,7 +3716,7 @@ initWorldcup().catch((err) => console.warn('[Worldcup] init failed:', err));
     musicActive = Boolean(visible);
     document.body.classList.toggle("music-mode", musicActive);
     musicBtn?.classList.toggle("active", musicActive);
-    window.dispatchEvent(new CustomEvent("bailongma:music-mode", {
+    window.dispatchEvent(new CustomEvent("jarvis:music-mode", {
       detail: { active: musicActive },
     }));
   }
@@ -3893,8 +3893,8 @@ initWorldcup().catch((err) => console.warn('[Worldcup] init failed:', err));
     }
   });
 
-  window.bailongmaMedia = { handle: handleMediaCommand, showVideo, controlVideo, showImage, showCamera, showMusic, controlMusic };
-  window.addEventListener("bailongma:media", (event) => handleMediaCommand(event.detail || {}));
+  window.jarvisMedia = { handle: handleMediaCommand, showVideo, controlVideo, showImage, showCamera, showMusic, controlMusic };
+  window.addEventListener("jarvis:media", (event) => handleMediaCommand(event.detail || {}));
 
   // Push-to-talk：按住空格说话；Agent 正在说话时按下空格直接打断
   (() => {
@@ -3913,7 +3913,7 @@ initWorldcup().catch((err) => console.warn('[Worldcup] init failed:', err));
       pttHeld = true;
       // 不论是否在播，stopTTS 内部已做 no-op 守卫
       try { window.stopTTS?.(); } catch {}
-      window.bailongmaVoice?.pttStart?.();
+      window.jarvisVoice?.pttStart?.();
     }, { capture: true });
 
     window.addEventListener("keyup", (e) => {
@@ -3921,7 +3921,7 @@ initWorldcup().catch((err) => console.warn('[Worldcup] init failed:', err));
       if (!pttHeld) return;
       pttHeld = false;
       e.preventDefault();
-      window.bailongmaVoice?.pttEnd?.();
+      window.jarvisVoice?.pttEnd?.();
     }, { capture: true });
 
     // 切到后台/失焦（如点开 DevTools、切窗口）时如果还按着，强制释放 PTT，避免 mic 永远不关。
@@ -3929,7 +3929,7 @@ initWorldcup().catch((err) => console.warn('[Worldcup] init failed:', err));
     window.addEventListener("blur", () => {
       if (!pttHeld) return;
       pttHeld = false;
-      window.bailongmaVoice?.pttEnd?.({ send: false });
+      window.jarvisVoice?.pttEnd?.({ send: false });
     });
   })();
 
@@ -3991,7 +3991,7 @@ initWorldcup().catch((err) => console.warn('[Worldcup] init failed:', err));
 
   function setActive(on){
     active=!!on; document.body.classList.toggle("aivideo-mode", active);
-    if(active){ try{ window.bailongmaMedia&&window.bailongmaMedia.controlVideo&&window.bailongmaMedia.controlVideo({action:"pause"}); }catch(e){} document.body.classList.remove("video-mode"); }
+    if(active){ try{ window.jarvisMedia&&window.jarvisMedia.controlVideo&&window.jarvisMedia.controlVideo({action:"pause"}); }catch(e){} document.body.classList.remove("video-mode"); }
     syncDraft(true);   // 开/关状态立即同步
   }
 
@@ -4166,8 +4166,8 @@ initWorldcup().catch((err) => console.warn('[Worldcup] init failed:', err));
     if(action==="ready"){ job.status="done"; job.videoUrl=data.videoUrl; renderQueue(); if(!active) setActive(true); loadPlayer(job); return; }
     if(action==="error"){ job.status="fail"; job.error=data.message||"生成失败"; renderQueue(); return; }
   }
-  window.addEventListener("bailongma:aivideo", function(e){ handle(e.detail||{}); });
-  window.bailongmaAIVideo={ handle:handle, open:openPanel, close:closePanel };
+  window.addEventListener("jarvis:aivideo", function(e){ handle(e.detail||{}); });
+  window.jarvisAIVideo={ handle:handle, open:openPanel, close:closePanel };
 
   renderDropzone(); updateMode(); renderQueue(); autoGrow();
   hydrateHistory();   // 初始化即重建一次（覆盖 app 重启/渲染进程重载后的历史恢复）

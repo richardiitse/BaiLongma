@@ -5,8 +5,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$env:BAILONGMA_HOST = '0.0.0.0'
-$env:BAILONGMA_ALLOW_LAN = '1'
+$env:JARVIS_HOST = '0.0.0.0'
+$env:JARVIS_ALLOW_LAN = '1'
 
 function Test-PrivateLanAddress {
   param([string]$Address)
@@ -25,7 +25,7 @@ $addresses = Get-NetIPAddress -AddressFamily IPv4 |
   Select-Object -ExpandProperty IPAddress -Unique
 
 Write-Host ''
-Write-Host 'Bailongma LAN mode is enabled.'
+Write-Host 'Jarvis LAN mode is enabled.'
 Write-Host 'Open one of these URLs on another device connected to the same network:'
 foreach ($address in $addresses) {
   Write-Host "  http://$address`:3721/"

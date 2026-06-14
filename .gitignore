@@ -143,3 +143,12 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# AI 工具缓存（非源码；.harness/ 是项目 agent 团队定义，需保留跟踪）
+.opencode/
+.codegraph/
+.mavis/
+
+# personal local settings + tool cache
+.claude/settings.local.json
+.omx/

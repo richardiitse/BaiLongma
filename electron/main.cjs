@@ -15,18 +15,18 @@ const { pathToFileURL } = require('url')
 const { autoUpdater } = require('electron-updater')
 
 const IS_DEV = !app.isPackaged
-const WINDOWS_APP_USER_MODEL_ID = 'com.xiaoyuanda.bailongma'
+const WINDOWS_APP_USER_MODEL_ID = 'com.richardiitse.jarvis'
 const USER_DIR = app.getPath('userData')
 const CODE_ROOT = app.getAppPath()
 const RESOURCE_ROOT = CODE_ROOT
 const BACKEND_ENTRY = path.join(CODE_ROOT, 'src', 'index.js')
 
-// 持久化日志：把 console.* 镜像到 USER_DIR/logs/bailongma.log，
+// 持久化日志：把 console.* 镜像到 USER_DIR/logs/jarvis.log，
 // 安装版没有 stdout 的情况下，卡死/崩溃后还能 tail 这个文件复盘。
 // 简易 rotate：> 5MB 时把当前文件改名 .old（覆盖上一份 .old），下次写入重开。
 const LOG_DIR = path.join(USER_DIR, 'logs')
-const LOG_FILE = path.join(LOG_DIR, 'bailongma.log')
-const LOG_FILE_OLD = path.join(LOG_DIR, 'bailongma.old.log')
+const LOG_FILE = path.join(LOG_DIR, 'jarvis.log')
+const LOG_FILE_OLD = path.join(LOG_DIR, 'jarvis.old.log')
 const LOG_MAX_BYTES = 5 * 1024 * 1024
 try { fs.mkdirSync(LOG_DIR, { recursive: true }) } catch {}
 function rotateLogIfNeeded() {
@@ -72,7 +72,7 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err?.stack || err?.message || String(err))
 })
-console.log(`[main] Bailongma ${app.getVersion()} starting, logs → ${LOG_FILE}`)
+console.log(`[main] Jarvis ${app.getVersion()} starting, logs → ${LOG_FILE}`)
 
 let mainWindow = null
 let backendPort = 0
@@ -82,7 +82,7 @@ let focusBannerWindow = null
 // 后端通过 global.focusBannerBridge 控制横幅窗口
 const focusBannerBridge = new EventEmitter()
 global.focusBannerBridge = focusBannerBridge
-global.bailongmaAppControl = {
+global.jarvisAppControl = {
   restart() {
     console.log('[main] restart requested')
     app.isQuiting = true
@@ -104,9 +104,9 @@ function sendUpdaterStatus(payload = {}) {
 }
 
 async function bootstrapBackend(port) {
-  process.env.BAILONGMA_USER_DIR ||= USER_DIR
-  process.env.BAILONGMA_RESOURCES_DIR ||= RESOURCE_ROOT
-  process.env.BAILONGMA_PORT = String(port)
+  process.env.JARVIS_USER_DIR ||= USER_DIR
+  process.env.JARVIS_RESOURCES_DIR ||= RESOURCE_ROOT
+  process.env.JARVIS_PORT = String(port)
   await import(pathToFileURL(BACKEND_ENTRY).href)
 }
 
@@ -166,7 +166,7 @@ async function createWindow() {
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#0b0b0e',
-    title: 'Bailongma',
+    title: 'Jarvis',
     icon: path.join(RESOURCE_ROOT, 'build', 'icon.png'),
     webPreferences: {
       contextIsolation: true,
@@ -216,7 +216,7 @@ async function createWindow() {
     return { action: 'allow' }
   })
 
-  await mainWindow.loadURL(`http://127.0.0.1:${backendPort}/`)
+  await mainWindow.loadURL(`http://127.0.0.1:${backendPort}/brain-ui`)
   // 关闭主窗口时最小化到托盘，不退出
   mainWindow.on('close', (e) => {
     if (!app.isQuiting) {
@@ -233,7 +233,7 @@ async function createWindow() {
 function setupTray() {
   const iconPath = path.join(RESOURCE_ROOT, 'build', 'icon.ico')
   tray = new Tray(nativeImage.createFromPath(iconPath))
-  tray.setToolTip('Bailongma')
+  tray.setToolTip('Jarvis')
 
   const contextMenu = Menu.buildFromTemplate([
     {
@@ -470,7 +470,7 @@ app.whenReady().then(async () => {
     await bootstrapBackend(backendPort)
     await waitForBackend(backendPort)
   } catch (err) {
-    dialog.showErrorBox('Startup failed', `Unable to start the Bailongma backend:\n${err.message}`)
+    dialog.showErrorBox('Startup failed', `Unable to start the Jarvis backend:\n${err.message}`)
     app.quit()
     return
   }

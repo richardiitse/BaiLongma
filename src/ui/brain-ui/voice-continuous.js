@@ -40,7 +40,7 @@ const VOICE_GRACE_AFTER_TRANSCRIPT_MS = 800;
 // 就一律顺延（即便转录暂时跟不上），真正安静满 SILENCE_SEND_MS 才发。
 // SPEECH_VOL 取高于环境噪声、低于打断阈值(0.09)的中间值；可经 localStorage 调。
 const SPEECH_VOL = (() => {
-  const v = parseFloat(localStorage.getItem('bailongma-voice-speech-vol') || '');
+  const v = parseFloat(localStorage.getItem('jarvis-voice-speech-vol') || '');
   return Number.isFinite(v) && v > 0 && v < 0.09 ? v : 0.04;
 })();
 // 纯靠音量顺延的硬上限：防持续噪音/底噪无限推迟发送（保留原「噪音不该锁死发送」意图）。
@@ -52,7 +52,7 @@ export function createContinuousPolicy(core, { getAutoSend }) {
   // 「攒成一条，说完再发」：只有真正停足够久才发，中途思考停顿不切断。
   // 静音阈值可经 localStorage 调，默认 2s（比一次思考停顿长，比一句话间隔长）。
   const SILENCE_SEND_MS = (() => {
-    const v = parseInt(localStorage.getItem('bailongma-voice-silence-ms') || '', 10);
+    const v = parseInt(localStorage.getItem('jarvis-voice-silence-ms') || '', 10);
     return Number.isFinite(v) && v >= 800 ? v : 2000;
   })();
   let autoSendTimer = null;

@@ -64,7 +64,7 @@ export function setWorldcupMode(visible, { source = 'brain-ui' } = {}) {
     else finishClose();
   }
 
-  window.dispatchEvent(new CustomEvent('bailongma:worldcup-mode', {
+  window.dispatchEvent(new CustomEvent('jarvis:worldcup-mode', {
     detail: { active: nextVisible },
   }));
   reportWorldcupState(nextVisible, source);
@@ -79,7 +79,7 @@ export async function initWorldcup() {
   if (exitBtn) exitBtn.addEventListener('click', () => toggleWorldcup());
 
   // 热点面板打开时让位（事件解耦，避免 hotspot.js 反向 import 形成循环）
-  window.addEventListener('bailongma:hotspot-mode', (event) => {
+  window.addEventListener('jarvis:hotspot-mode', (event) => {
     if (event?.detail?.active && worldcupActive) setWorldcupMode(false, { source: 'hotspot_open' });
   });
 }

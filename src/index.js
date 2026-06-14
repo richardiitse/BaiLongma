@@ -1808,7 +1808,7 @@ async function main() {
   }
 
   // Start HTTP API — must start regardless of activation status; the activation page depends on it
-  const apiPort = Number(process.env.BAILONGMA_PORT) || 3721
+  const apiPort = Number(process.env.JARVIS_PORT) || 3721
   startAPI(apiPort, {
     getStateSnapshot: () => ({
       action: state.action,
