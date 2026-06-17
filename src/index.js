@@ -1,5 +1,6 @@
-import { config, getMinimaxKey as _getMinimaxKey, getSecurity } from './config.js'
+import { config, getMinimaxKey as _getMinimaxKey, getSecurity, getTurnEngine } from './config.js'
 import { callLLM } from './llm.js'
+// runPiTurn 惰性加载（pi 分支动态 import），保证默认 llm 路径完全不加载 Pi SDK、零回归。
 import { buildSystemPrompt, buildContextBlock, combinePromptForPreview } from './prompt.js'
 import { enqueueTurnForRecognition, configureRecognizerScheduler } from './memory/recognizer-scheduler.js'
 import { runInjector, formatMemoriesForPrompt, formatActivePoliciesForPrompt, formatTaskKnowledge, formatPrefetchedItems, formatActiveUICards, formatTemporalRecall, formatAIVideoPanel } from './memory/injector.js'
@@ -872,6 +873,12 @@ async function runTurn(input, label, msg = null) {
   if (!silentSignal) emitEvent(isTick ? 'tick' : 'message_received', { label, input: input.slice(0, 300) })
 
   // User messages are written to conversations at the pushMessage stage (recorded on arrival) — do not write them again here.
+  // localReply：本地渠道（语音 / TUI，非社交）下纯文本即回复，模型无需调 send_message——
+  // runtime 协议兜底会替它真正投递（含语音 TTS）。社交渠道（微信/Discord/飞书/企微）才必须
+  // send_message 才能送达外部平台。省掉 send_message 那整轮额外 LLM 调用是语音提速的关键。
+  // ⚠️ 声明在 try 之外：L14xx 的投递遥测分支在 catch/finally 之后（try 块外）也引用 localReply，
+  //    若声明在 try 内会 ReferenceError（曾导致 [onTick] runTurn 抛出未处理异常）。
+  const localReply = !!msg?.fromId && !silentSignal && !isExternalChannel(msg?.channel)
   try {
     beginExecution({
       priority,
@@ -1319,10 +1326,6 @@ async function runTurn(input, label, msg = null) {
     // 这是审视独立性的承重墙——主 Agent 无法在 review_work 参数里粉饰或省略它做过的事。
     toolContext.turnToolLog = toolCallLog
     const voiceTurn = isVoiceChannel(msg?.channel)
-    // localReply：本地渠道（语音 / TUI，非社交）下纯文本即回复，模型无需调 send_message——
-    // runtime 协议兜底会替它真正投递（含语音 TTS）。社交渠道（微信/Discord/飞书/企微）才必须
-    // send_message 才能送达外部平台。省掉 send_message 那一整轮额外 LLM 调用是语音提速的关键。
-    const localReply = !!msg?.fromId && !silentSignal && !isExternalChannel(msg?.channel)
     let turnTools = resolveTurnTools(injection.tools, { silentSignal })
     // 语音轮撤掉 send_message（用户决策）：语音回复直接走纯文本 → runtime 协议兜底 executeTool
     // 投递 + 自动 TTS，模型既不必也不能调 send_message，彻底消除"调工具那一轮"的延迟，也不让它
@@ -1342,7 +1345,18 @@ async function runTurn(input, label, msg = null) {
     // 后端不再整段补一次 autoSpeakForVoiceReply，避免重复念。
     let curStreamMode = null
     let sawTextStream = false
-    llmResult = await callLLM({
+    // Slice 2 + 临时止血(A)：按 config.turnEngine 分流——'pi' 走 Pi SDK runPiTurn，否则 callLLM。
+    // 两者暴露同一 callback 面（onStream/onToolCall/onToolExecute/signal/toolContext），
+    // args 对象完全一致，外层 runTurn 逻辑（焦点栈/投递/标记解析）零改动。默认 'llm' 零回归。
+    // 但 pi 目前只支持 minimax provider（Slice 4 才接多 provider）：非 minimax 时显式回退 llm
+    // 并 warn，绝不静默用 minimax 顶替用户在配置页选的 provider。
+    const piMod = getTurnEngine() === 'pi' ? await import('./pi/turn-engine.js') : null
+    const usePi = !!(piMod && piMod.isPiSupportedForConfig())
+    if (piMod && !usePi) {
+      console.warn(`[pi] provider=${config.provider} 暂不被 pi 引擎支持（仅 minimax），本轮回退 llm 引擎`)
+    }
+    const turnEngine = usePi ? piMod.runPiTurn : callLLM
+    llmResult = await turnEngine({
       systemPrompt,
       message: input,
       messages: llmMessages,
