@@ -14,6 +14,7 @@ import { setUserLocation } from '../weather.js'
 import { getAgentById, isDelegationAllowed } from '../agents/registry.js'
 import { installTool, uninstallTool, listInstalledTools, isInstalledTool, executeInstalledTool, getInstalledToolSchema } from './marketplace/index.js'
 import { TOOL_SCHEMAS } from './schemas.js'
+import { isCliAllowed, getCliEntry, listAllowedClis } from '../cli-whitelist.js'
 import { TOOL_GROUPS } from '../memory/tool-router.js'
 import { throwIfAborted } from './abort-utils.js'
 import { execUIHide, execUIRegister, execUIShow, execUIUpdate, execUIPatch, execManageApp } from './tools/ui.js'
@@ -148,6 +149,8 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execMakeDir(args, context)
       case 'exec_command':
         return await execCommand(args, context)
+      case 'run_cli':
+        return await execRunCli(args, context)
       case 'kill_process':
         return await execKillProcess(args)
       case 'list_processes':
@@ -263,6 +266,20 @@ async function executeToolUnchecked(name, args, context = {}) {
     if (err.name === 'AbortError') throw err
     return `执行失败：${err.message}`
   }
+}
+
+// run_cli：白名单驱动的本机 CLI 调用（exec_command 的受限安全档）。
+// 校验 cmd ∈ 白名单 → 否则拒绝；放行后复用 exec_command 的 runner（沙箱/审计/超时/截断）。
+async function execRunCli({ cmd, args } = {}, context = {}) {
+  const name = String(cmd || '').trim()
+  if (!name) return toolJson({ ok: false, error: 'cmd 必填' })
+  if (!isCliAllowed(name)) {
+    return toolJson({ ok: false, error: `cli "${name}" 不在白名单`, allowed: listAllowedClis().map(c => c.name) })
+  }
+  const entry = getCliEntry(name)
+  const bin = entry?.path || name   // path 避开 Electron PATH 缺失用户级 bin 的问题
+  const argStr = Array.isArray(args) ? args.map(String).join(' ') : String(args || '')
+  return await execCommand({ command: `${bin} ${argStr}`.trim() }, context)
 }
 
 export async function executeTool(name, args, context = {}) {

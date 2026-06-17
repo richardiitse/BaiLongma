@@ -38,6 +38,7 @@ const CORE_TOOLS = [
   // 工具（比如关键词没命中导致 generate_image / exec_command 没进来），可调 find_tool 搜出来并当场装载。
   'find_tool',
   'ui_show', 'ui_update', 'ui_hide', 'ui_register', 'ui_patch',
+  'run_cli',
 ]
 
 const TASK_CTRL_FULL    = ['set_task', 'complete_task', 'update_task_step', 'review_work']
