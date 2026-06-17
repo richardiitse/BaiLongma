@@ -1,4 +1,5 @@
 import { createMarkdownBody } from "./markdown.js";
+import { isAlertEnabled } from "./alert-sound-pref.js";
 
 // 把数据库/事件里的细粒度 channel 名转成 UI 友好的简化标签
 export function friendlyChannelLabel(channel) {
@@ -109,6 +110,7 @@ export function initChat({
   }
 
   async function playJarvisAlert() {
+    if (!isAlertEnabled()) return;
     const ctx = ensureAudioContext();
     if (!ctx) return;
     try { if (ctx.state === "suspended") await ctx.resume(); } catch { return; }

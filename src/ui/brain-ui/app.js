@@ -11,6 +11,7 @@ import { enrichVisiblePersonCardFromText, initPersonCard, setPersonCardMode, sho
 import { initDocPanel, setDocPanelMode } from "./doc.js";
 import { initWechatPopup, showWechatPopup } from "./wechat-popup.js";
 import { attachJarvisFx, isFxEnabledForVoice, setFxEnabledForVoice, getJarvisFxParams, setJarvisFxParams, resetJarvisFxParams, isFxUnlocked, tryUnlockFx } from "./tts-fx.js";
+import { isAlertEnabled, setAlertEnabled } from "./alert-sound-pref.js";
 renderBrainUiApp(document.body);
 const THEME_KEY = "jarvis-brain-ui-theme";
 const PHYSICS_STORAGE_KEY = "jarvis-brain-ui-physics";
@@ -2108,6 +2109,13 @@ function initTTSSettings() {
   if (streamingToggle) {
     streamingToggle.checked = isTTSStreamingEnabled();
     streamingToggle.addEventListener("change", () => setTTSStreamingEnabled(streamingToggle.checked));
+  }
+
+  // 回复提示音开关（默认开）：存在 localStorage
+  const alertToggle = document.getElementById("alert-sound-toggle");
+  if (alertToggle) {
+    alertToggle.checked = isAlertEnabled();
+    alertToggle.addEventListener("change", () => setAlertEnabled(alertToggle.checked));
   }
 
   let allVoices = {};

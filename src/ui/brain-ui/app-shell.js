@@ -487,6 +487,13 @@ const createSettingsModal = () => `
                 给当前声音叠加混响 / 机械质感（默认关）
               </label>
             </div>
+            <div class="settings-row">
+              <label class="settings-label" for="alert-sound-toggle">回复提示音</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--ink2);">
+                <input type="checkbox" id="alert-sound-toggle" />
+                Jarvis 回复时的提示音（默认开）
+              </label>
+            </div>
             <div id="tts-fx-lock" style="display:none;flex-direction:column;align-items:stretch;gap:6px;padding:8px 0 4px;">
               <p class="settings-hint" style="margin:0;color:#e0a64d;">未来感音效需要付费，这是维持这个项目动力，请联系作者索要密码</p>
               <div style="display:flex;gap:8px;align-items:center;">
