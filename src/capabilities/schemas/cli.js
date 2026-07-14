@@ -3,19 +3,19 @@
 // 见 .claude/plans/cli-tool-invocation.plan.md M1。
 import { listAllowedClis } from '../../cli-whitelist.js'
 
-function allowedClisText() {
-  const list = listAllowedClis()
-  if (!list.length) return '(暂无白名单 CLI)'
+function allowedClisText(list = listAllowedClis()) {
+  if (!list || !list.length) return '(暂无白名单 CLI)'
   return list.map(e => `- ${e.name}${e.description ? ': ' + e.description : ''}`).join('\n')
 }
 
-export function buildCliSchemas() {
+export function buildCliSchemas(list = null) {
+  const items = list === null ? listAllowedClis() : list
   return {
     run_cli: {
       type: 'function',
       function: {
         name: 'run_cli',
-        description: `Run a whitelisted local CLI — a safer, restricted alternative to exec_command. cmd MUST be one of the allowed CLIs below; non-whitelisted cmds are rejected. Pass the CLI's subcommand and options as args (a single string). Output is truncated like exec_command. Prefer read-only subcommands in autonomous/TICK contexts.\n\nAvailable CLIs:\n${allowedClisText()}`,
+        description: `Run a whitelisted local CLI — a safer, restricted alternative to exec_command. cmd MUST be one of the allowed CLIs below; non-whitelisted cmds are rejected. Pass the CLI's subcommand and options as args (a single string). Output is truncated like exec_command. Prefer read-only subcommands in autonomous/TICK contexts.\n\nAvailable CLIs:\n${allowedClisText(items)}`,
         parameters: {
           type: 'object',
           properties: {
