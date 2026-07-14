@@ -41,7 +41,9 @@ function injectFoundToolSchemas(result, toolSchemas) {
 // 避免模块加载阶段就锁死尚未填入的 apiKey/baseURL。
 let client = null
 let clientKey = null
+let _clientOverride = null  // 测试注入：合成 OpenAI 客户端；非 null 时绕过真实创建
 function getClient() {
+  if (_clientOverride) return _clientOverride
   const signature = `${config.provider}|${config.baseURL}|${config.apiKey}`
   if (client && clientKey === signature) return client
   if (!config.apiKey) {
@@ -52,6 +54,10 @@ function getClient() {
   return client
 }
 
+// ── 测试专用：注入合成客户端，绕过真实网络（仅 *_ForTest 路径使用）──
+export function _setClientForTest(c) { _clientOverride = c }
+export function _clearClientForTest() { _clientOverride = null }
+
 function shouldEnableDeepSeekThinking(thinking) {
   if (!thinking) return false
   if (config.model === 'deepseek-chat') return false
@@ -59,7 +65,7 @@ function shouldEnableDeepSeekThinking(thinking) {
 }
 
 // 单次流式调用，返回 { content, toolCalls, aborted }
-async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream }) {
+export async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream }) {
   const requestParams = {
     model: config.model,
     temperature,
@@ -122,6 +128,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
   let toolCallsMap = {}
   let inThink = false
   let thinkDone = false
+  let thinkFromField = false  // think 流由 reasoning_content 字段开启(DeepSeek)=true；由内联 <think> 标签开启(minimax 等)=false
   let streamStarted = false
   let usageTokens = 0
   let cacheHitTokens = 0
@@ -175,6 +182,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
       fullReasoningContent += reasoningText
       if (!thinkDone) {
         inThink = true
+        thinkFromField = true
         if (!streamStarted) { onStream?.({ event: 'start', mode: 'think' }); streamStarted = true }
         onStream?.({ event: 'chunk', text: reasoningText })
       }
@@ -185,8 +193,10 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
     const text = delta?.content
     if (!text) continue
 
-    // DeepSeek：思考流结束、进入正式回答时，先关闭 think 流
-    if (inThink && !thinkDone) {
+    // DeepSeek：思考流结束（reasoning_content 字段→content 字段切换）、进入正式回答时先关 think 流。
+    // 仅"字段式"推理(thinkFromField)走这里；minimax 等"内联 <think> 标签式"推理的 think 流由 </think> 闭合，
+    // 不能在这里关——否则首个 <think> chunk 之后就把 thinkDone 置真，后续推理被当成正文送进 TTS 朗读。
+    if (inThink && !thinkDone && thinkFromField) {
       inThink = false
       thinkDone = true
       if (streamStarted) { onStream?.({ event: 'end' }); streamStarted = false }
@@ -198,6 +208,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
     if (!thinkDone) {
       if (!inThink && fullContent.includes('<think>')) {
         inThink = true
+        thinkFromField = false
         const after = fullContent.split('<think>').slice(1).join('<think>')
         if (after.length > 0) {
           if (!streamStarted) { onStream?.({ event: 'start', mode: 'think' }); streamStarted = true }
