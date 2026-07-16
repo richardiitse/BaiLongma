@@ -241,6 +241,28 @@ function attachSceneProtocol() {
       return
     }
 
+    if (name === 'select' && surface.startsWith('xz-confirm-')) {
+      const pending = sceneStore.get(surface)?.data?.pending || {}
+      sceneStore.set(surface, null)
+      if (data.value === 'confirm') {
+        // 用户确认后，把原始工具调用作为后台消息推入队列，Agent 下一轮会看到并重新执行（这次不再拦截）。
+        pushMessage(
+          'SYSTEM',
+          `[xz write confirmed] User confirmed ${pending.tool} ${pending.args?.command || ''}. Re-execute the tool now — the confirmation gate has passed.\n(Do NOT call send_message; just call the tool.)`,
+          'APP_SIGNAL',
+          { queue: 'background', persist: false, silent: true },
+        )
+      } else {
+        pushMessage(
+          'SYSTEM',
+          `[xz write cancelled] User cancelled ${pending.tool} ${pending.args?.command || ''}. Do not retry.\n(Internal context refresh only. Do NOT call send_message.)`,
+          'APP_SIGNAL',
+          { queue: 'background', persist: false, silent: true },
+        )
+      }
+      return
+    }
+
     if (!SCENE_PASSIVE_INTENTS.has(name)) {
       pushMessage(`UI:${surface}`, `[UI intent surface=${surface} name=${name}]\n${JSON.stringify(data, null, 2)}`, 'APP_SIGNAL')
     }

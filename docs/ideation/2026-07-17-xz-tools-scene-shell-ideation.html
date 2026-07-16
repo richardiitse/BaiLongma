@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ideation: xz 工具调用优先采用 Scene-Shell</title>
+<style>
+  :root { --ink:#1a1a2e; --ink2:#555; --bg:#fafafa; --card:#fff; --accent:#4a6fa5; --danger:#c44; --ok:#2a8; --rule:#e0e0e0; }
+  * { box-sizing:border-box; }
+  body { font-family:-apple-system,'Segoe UI',Roboto,sans-serif; line-height:1.7; color:var(--ink); background:var(--bg); max-width:880px; margin:0 auto; padding:32px 24px; }
+  h1 { font-size:1.8em; border-bottom:3px solid var(--accent); padding-bottom:.3em; }
+  h2 { font-size:1.35em; margin-top:2.5em; border-bottom:1px solid var(--rule); padding-bottom:.2em; }
+  h3 { font-size:1.1em; margin-top:1.8em; color:var(--accent); }
+  h3 .rank { display:inline-block; background:var(--accent); color:#fff; border-radius:4px; padding:1px 7px; font-size:.8em; margin-right:6px; vertical-align:middle; }
+  .meta { font-size:.85em; color:var(--ink2); margin-bottom:2em; }
+  .meta table { border-collapse:collapse; }
+  .meta td { padding:2px 12px 2px 0; }
+  .jump-list { background:var(--card); border:1px solid var(--rule); border-radius:8px; padding:14px 18px; margin:1em 0 2em; }
+  .jump-list ul { margin:0; padding-left:1.2em; columns:2; }
+  .jump-list a { color:var(--accent); text-decoration:none; font-size:.9em; }
+  .jump-list a:hover { text-decoration:underline; }
+  .idea-card { background:var(--card); border:1px solid var(--rule); border-radius:10px; padding:18px 22px; margin:1.2em 0; }
+  .idea-card .desc { margin:.6em 0; }
+  .idea-card .field { font-size:.88em; margin:.3em 0; }
+  .idea-card .field strong { color:var(--ink); }
+  .badge { display:inline-block; font-size:.75em; padding:1px 7px; border-radius:4px; margin-left:6px; vertical-align:middle; }
+  .badge-low { background:#e8f5e9; color:#2a7; }
+  .badge-mid { background:#fff3e0; color:#c80; }
+  .badge-high { background:#fce4ec; color:#c44; }
+  .basis-tag { font-family:monospace; font-size:.8em; background:#f0f0f0; padding:1px 5px; border-radius:3px; }
+  .cut { background:#fff0f0; border-color:#fcc; }
+  .cut .axis, .cut .basis-tag { opacity:.6; }
+  blockquote { border-left:3px solid var(--accent); margin:.5em 0; padding:.3em 1em; background:#f5f7fa; font-size:.9em; color:var(--ink2); }
+  code { background:#f0f0f0; padding:1px 4px; border-radius:3px; font-size:.88em; }
+  .diagram { background:#f5f7fa; border:1px solid var(--rule); border-radius:8px; padding:16px; margin:1em 0; font-family:monospace; font-size:.82em; white-space:pre; overflow-x:auto; }
+  hr { border:none; border-top:1px solid var(--rule); margin:2em 0; }
+  .axis-list li { margin:.2em 0; }
+</style>
+</head>
+<body>
+
+<h1>Ideation: xz 工具调用优先采用 Scene-Shell</h1>
+
+<div class="meta">
+<table>
+<tr><td><strong>日期</strong></td><td>2026-07-17</td></tr>
+<tr><td><strong>话题</strong></td><td>xz-tools-scene-shell</td></tr>
+<tr><td><strong>聚焦</strong></td><td>调用 xz 系列工具时候，优先采用 Scene-Shell</td></tr>
+<tr><td><strong>模式</strong></td><td>repo-grounded</td></tr>
+</table>
+</div>
+
+<h2>📌 Grounding Context</h2>
+
+<div class="idea-card">
+<p><strong>核心缺口：</strong>xz 工具（<code>xz_calendar</code> / <code>xz_notes</code>）目前<strong>零 Scene-Shell 集成</strong>。<code>src/capabilities/tools/xz.js</code> 直接 spawn CLI，返回工具信封 JSON（<code>{ok, stdout, ...}</code>），<strong>无后处理、无 surface 投影</strong>。Agent 收到的是 raw stdout 字符串（或嵌在字符串里的 JSON），需要自己 parse 再用文字描述给用户。</p>
+
+<p><strong>三个已有先例模式（xz 可直接参照）：</strong></p>
+<ul>
+<li><strong>模式 A — core 直接投影（天气）：</strong><code>index.js:816-838</code> <code>projectWeatherSurfaceForTurn</code>，确定性查询结果由 core 直接投影成 <code>kind:'weather'</code> surface，不经 Agent。</li>
+<li><strong>模式 B — job 咽喉点投影（软件安装）：</strong><code>software-install-scene.js</code> 挂在 <code>updateJob</code> 咽喉点，把异步 job 状态翻译成 <code>kind:'progress'</code> surface。</li>
+<li><strong>模式 C — 工具内挂 choice+confront（安全确认）：</strong><code>executor.js:1120-1164</code> <code>execSetSecurity</code> 用 <code>kind:'choice'</code> + <code>intent:'confront'</code> + <code>data.pending</code> 做写操作确认。</li>
+</ul>
+
+<p><strong>kind 词汇表现状：</strong>scene-shell 注册了 <code>text/metric/image/choice/weather/progress/selfcheck/awakening/stack/row/col</code>。<strong>缺 <code>list</code>/<code>table</code> 和 <code>form</code></strong>——协议（<code>SCENE-PROTOCOL.md §6</code>）定义了 <code>form</code> 但 shell 未实现（<code>kinds/index.js</code> 无 <code>form.js</code>）。</p>
+
+<p><strong>web 行业对标：</strong>Google A2UI（声明式 JSON-as-UI）、CopilotKit（per-tool <code>render</code> 映射）、SimplePractice/TherapyNotes（临床 EMR 把列表/表格当一等公民）。</p>
+</div>
+
+<h2>🧭 Topic Axes</h2>
+
+<ul class="axis-list">
+<li><strong>轴 A：呈现粒度</strong> — 单个操作结果投影 vs 复合面板（今日排班+缴费+待办聚合）</li>
+<li><strong>轴 B：交互模式</strong> — 纯展示（只读投影）vs 交互决策（选项选择/确认）vs 结构化输入（表单）</li>
+<li><strong>轴 C：数据流路径</strong> — core 直接投影 vs Agent 自主声明 vs 投影层翻译</li>
+<li><strong>轴 D：场景类型</strong> — 查询类 vs 写操作类 vs 长任务类</li>
+</ul>
+
+<h2>🏆 Ranked Ideas</h2>
+
+<div class="jump-list">
+<ul>
+<li><a href="#idea-1">#1 xz-scene.js 投影层</a></li>
+<li><a href="#idea-2">#2 临床工作台 surface</a></li>
+<li><a href="#idea-3">#3 写操作 confront 确认流</a></li>
+<li><a href="#idea-4">#4 xz context block 加 ui_set 引导</a></li>
+<li><a href="#idea-5">#5 补 list/table kind</a></li>
+<li><a href="#idea-6">#6 脱敏投影</a></li>
+<li><a href="#idea-7">#7 工具不可用引导卡</a></li>
+</ul>
+</div>
+
+<!-- ============ IDEA 1 ============ -->
+<div class="idea-card" id="idea-1">
+<h3><span class="rank">1</span>xz-scene.js 投影层（per-command 映射表）</h3>
+
+<p class="desc"><strong>建一个独立的投影层文件</strong> <code>src/capabilities/tools/xz-scene.js</code>，内含一张 <strong>per-command → surface 模板映射表</strong>。<code>xz_calendar command="today"</code> → 今日排班 surface 模板；<code>command="appointment list"</code> → 列表 surface 模板。executor 调完 CLI 后，按表把 stdout 解析成结构化 <code>data</code> 投影成 surface。这是 CopilotKit 的 <code>render-per-tool</code> 模式。</p>
+
+<div class="diagram">xz_calendar({command:"today"})
+  │
+  ├─► spawn CLI → stdout (JSON)
+  │
+  ▼
+xz-scene.js 映射表
+  command="today" → { kind:"stack", data:{children:[
+    {kind:"text", data:{title:"今日排班", body:"..."}},
+    {kind:"metric", data:{label:"待缴费", value:3}}
+  ]}, intent:"inform" }
+  │
+  ▼
+sceneStore.set("xz-today-{date}", surface) → /scene WS → shell 投影</div>
+
+<div class="field"><strong>轴：</strong>C（数据流：投影层翻译）</div>
+<div class="field"><strong>basis：</strong><span class="basis-tag">direct:</span> <code>software-install-scene.js</code> 已是独立投影层先例；<code>executor.js:1124</code> 注释确认 Scene 无专用领域 kind；<span class="basis-tag">external:</span> CopilotKit render-per-tool 模式</div>
+<div class="field"><strong>rationale：</strong>把「CLI 输出格式」和「surface 呈现」解耦——xz CLI 升级不影响 UI，UI 升级不影响 CLI。新增子命令只需加一行映射。这是整个 ideation 的<strong>基础设施</strong>，其他想法都依赖它。</div>
+<div class="field"><strong>downsides：</strong>需要为每个 xz 子命令写解析+映射逻辑；CLI 输出格式变化时映射表要同步更新。中等工程量。</div>
+<div class="field"><strong>confidence：</strong>85% <strong>complexity：</strong><span class="badge badge-mid">Medium</span></div>
+</div>
+
+<!-- ============ IDEA 2 ============ -->
+<div class="idea-card" id="idea-2">
+<h3><span class="rank">2</span>「咨询师临床工作台」持续在场 surface</h3>
+
+<p class="desc">不是逐次查询返回单张卡，而是一个<strong>持续在场的「临床工作台」surface</strong>——今日排班 + 待缴费 + 待编译笔记聚合在一个 <code>stack</code> 面板里。core 在 TICK 心跳时自动刷新（仿天气 ambient 投影），随状态 morph 更新。咨询师早上打开 Jarvis 就看到「今日全貌」，零交互。</p>
+
+<div class="diagram">┌─── 咨询师工作台（intent: ambient，持续在场）───┐
+│                                                    │
+│  📋 今日排班 (3)          💰 待缴费 (2)           │
+│  ┌─────────────┐         ┌──────────────┐        │
+│  │ 09:00 王XX  │         │ 李XX ¥800    │        │
+│  │ 11:00 陈XX  │         │ 张XX ¥600    │        │
+│  │ 14:00 刘XX  │         └──────────────┘        │
+│  └─────────────┘                                  │
+│                                                    │
+│  📝 待编译笔记 (1)         ⚠ 临床提醒            │
+│  ┌─────────────┐         上次会期未确认知情同意  │
+│  │ 张XX 06-15  │                                  │
+│  └─────────────┘                                  │
+└────────────────────────────────────────────────────┘</div>
+
+<div class="field"><strong>轴：</strong>A（复合面板）+ C（core 自动）+ D（查询类）</div>
+<div class="field"><strong>basis：</strong><span class="basis-tag">reasoned:</span> 天气已有 ambient 自动投影先例（<code>index.js:816</code>）；TICK 心跳机制天然适合定时刷新；<span class="basis-tag">external:</span> 医院 HIS/EMR 临床看板范式——持续在场的多区域仪表盘</div>
+<div class="field"><strong>rationale：</strong>心理咨询工作流天然多维并行（预约→会面→记录→结算），HIS 看板范式经过验证。这是从「响应式工具调用」升级到「主动式仪表盘」的旗舰特性。</div>
+<div class="field"><strong>downsides：</strong>需要 core 定时调 xz CLI 刷新（CLI 负载+延迟）；surface 过大可能抢焦点（需克制 intent=ambient）；CLI 不可用时看板空白需优雅降级。</div>
+<div class="field"><strong>confidence：</strong>75% <strong>complexity：</strong><span class="badge badge-high">High</span></div>
+</div>
+
+<!-- ============ IDEA 3 ============ -->
+<div class="idea-card" id="idea-3">
+<h3><span class="rank">3</span>写操作 confront 确认流（仿 set_security）</h3>
+
+<p class="desc">所有 xz 写操作（创建预约、缴费登记、笔记确认）走 <strong>confront choice 确认卡片</strong>。Agent 收集完信息后，弹一张「预约摘要：来访者 XX / 时间 / 时长 / 缴费状态」的 <code>kind:'choice'</code> + <code>intent:'confront'</code> 卡，用户确认后才真正写入 CLI。pending 变更存在 <code>data.pending</code> 里，用户确认后 scene intent handler 取出 apply。完全复用 <code>executor.js:1142</code> 的 set_security 机制。</p>
+
+<div class="field"><strong>轴：</strong>B（交互决策）+ D（写操作类）</div>
+<div class="field"><strong>basis：</strong><span class="basis-tag">direct:</span> <code>executor.js:1120-1164</code> set_security 用 choice+confront+pending 做安全确认；<span class="basis-tag">external:</span> 航班/酒店预订确认流——高代价操作前的视觉确认</div>
+<div class="field"><strong>rationale：</strong>心理咨询预约创建错误（时间/来访者搞混）的代价比航班改签更高——临床关系、计费、排班连锁影响。confront 级确认是临床安全要求。</div>
+<div class="field"><strong>downsides：</strong>每个写操作多一步确认可能降低高频操作的流畅度；需区分「需要确认」和「低风险直接执行」的边界。</div>
+<div class="field"><strong>confidence：</strong>90% <strong>complexity：</strong><span class="badge badge-low">Low</span></div>
+</div>
+
+<!-- ============ IDEA 4 ============ -->
+<div class="idea-card" id="idea-4">
+<h3><span class="rank">4</span>xz context block 加 ui_set 引导（最小改动杠杆）</h3>
+
+<p class="desc">在 <code>capability-registry.js:218-228</code> 的 xz context（函数式 lazy 求值）里加一段引导文本，教 Agent「调完 <code>xz_calendar today</code> 后用 <code>ui_set</code> 投影成 stack/text」。仿 <code>WEATHER_CONTEXT_BLOCK</code>（<code>:84-95</code>）写一段 <code>XZ_CONTEXT_BLOCK</code>。这是<strong>不改架构、不补 kind</strong>的最小改动路径。</p>
+
+<div class="field"><strong>轴：</strong>C（数据流：Agent 自主声明）</div>
+<div class="field"><strong>basis：</strong><span class="basis-tag">direct:</span> <code>capability-registry.js:84-95</code> WEATHER_CONTEXT_BLOCK 教 Agent 调 ui_set 的完整先例——字段映射、调用示例、去重约束</div>
+<div class="field"><strong>rationale：</strong>最低成本、最快见效。xz context 当前只教 CLI 用法零 scene 引导，加一段文本即可让 Agent 尝试投影。但单独使用可能不够（Agent 不一定遵守、投影质量不稳定）——适合作为 #1 投影层的<strong>补充</strong>而非替代。</div>
+<div class="field"><strong>downsides：</strong>Agent 可能不遵守引导规则；投影格式不稳定（模型可能拼出不规范的 surface data）；不如 core 直投可靠。</div>
+<div class="field"><strong>confidence：</strong>70% <strong>complexity：</strong><span class="badge badge-low">Low</span></div>
+</div>
+
+<!-- ============ IDEA 5 ============ -->
+<div class="idea-card" id="idea-5">
+<h3><span class="rank">5</span>补 list/table kind（全局杠杆）</h3>
+
+<p class="desc">scene-shell 的 kind 词汇表缺 <code>list</code>/<code>table</code>——xz 的核心场景（预约列表、来访者列表、缴费明细）全是列表/表格数据，现在只能用 <code>stack</code>+<code>text</code> 凑。补一个 <code>list</code> kind（支持表头+行+状态色），<strong>xz 和未来所有列表类工具都受益</strong>。</p>
+
+<div class="field"><strong>轴：</strong>A（呈现粒度）</div>
+<div class="field"><strong>basis：</strong><span class="basis-tag">external:</span> SimplePractice/TherapyNotes 等临床软件把列表/表格当一等公民；CopilotKit dashboard 也是；<span class="basis-tag">direct:</span> <code>kinds/index.js:27</code> REGISTRY 确认无 list/table</div>
+<div class="field"><strong>rationale：</strong>kind 词汇表扩展是全局杠杆——不只是 xz，hotspot/worldcup/任何列表类数据都受益。stack+text 凑列表是临时方案，语义和动画都不理想。</div>
+<div class="field"><strong>downsides：</strong>新增 kind 需要实现 render/enter/exit/morph 四段+CSS；需更新 SCENE-PROTOCOL.md 词汇表。但这是一次投入永久受益。</div>
+<div class="field"><strong>confidence：</strong>80% <strong>complexity：</strong><span class="badge badge-mid">Medium</span></div>
+</div>
+
+<!-- ============ IDEA 6 ============ -->
+<div class="idea-card" id="idea-6">
+<h3><span class="rank">6</span>脱敏投影（隐私保护）</h3>
+
+<p class="desc">心理咨询数据高度敏感。surface 里来访者用<strong>代号</strong>（C-001）而非真名，真实姓名只在 Agent 内部上下文。类比 xz-notes 已有的脱敏（<code>redaction</code>）概念。屏幕可能被旁人看到，脱敏投影保护来访者隐私。</p>
+
+<div class="field"><strong>轴：</strong>A（呈现粒度）+ D（场景类型）</div>
+<div class="field"><strong>basis：</strong><span class="basis-tag">direct:</span> <code>schemas/xz.js:48</code> xz_notes schema 含 "safety consent / redaction set / 脱敏"——临床脱敏是已有概念</div>
+<div class="field"><strong>rationale：</strong>临床合规——咨询师在公共场合/有人进入时，屏幕不应暴露来访者身份。xz_notes 的 redaction 机制已存在，surface 投影应与之对齐。</div>
+<div class="field"><strong>downsides：</strong>代号→真名的映射需要管理；用户可能觉得代号不直观。可做开关（设置里「脱敏模式」）。</div>
+<div class="field"><strong>confidence：</strong>65% <strong>complexity：</strong><span class="badge badge-low">Low</span></div>
+</div>
+
+<!-- ============ IDEA 7 ============ -->
+<div class="idea-card" id="idea-7">
+<h3><span class="rank">7</span>工具不可用引导卡（ENOENT 降级）</h3>
+
+<p class="desc">日志显示 xz-notes 曾 ENOENT（CLI 不在 PATH）。翻转「工具依赖 CLI」为「surface 不依赖 CLI 成功」：即使 CLI 不在，Agent 仍可用 <code>ui_set</code> 展示「检测到 xz 工具未安装」的 <code>choice</code> 卡（<code>intent:'confront'</code>），引导用户配置，而非纯文字报错。</p>
+
+<div class="field"><strong>轴：</strong>D（场景类型：错误处理）</div>
+<div class="field"><strong>basis：</strong><span class="basis-tag">direct:</span> 运行日志——xz-notes spawn ENOENT，Agent 只能用文字报错</div>
+<div class="field"><strong>rationale：</strong>工具不可用时视觉引导（配置卡片）比文字错误信息更友好。这是边缘场景但 UX 提升明显。</div>
+<div class="field"><strong>downsides：</strong>边缘场景，投入产出比一般。可作为 #1 投影层的附带功能。</div>
+<div class="field"><strong>confidence：</strong>60% <strong>complexity：</strong><span class="badge badge-low">Low</span></div>
+</div>
+
+<hr>
+
+<h2>✂️ Cut Ideas（被淘汰的想法及原因）</h2>
+
+<div class="idea-card cut">
+<h3>F1-1. xz 输出是「工具信封 JSON 包裹 stdout」（淘汰——这是问题描述不是想法）</h3>
+<div class="field"><strong>淘汰原因：</strong>这是 grounding 发现的现状描述，不是可执行的想法。它已被 #1（投影层）和 #4（context 引导）作为问题前提吸收。保留在 Grounding Context 里更合适。</div>
+</div>
+
+<div class="idea-card cut">
+<h3>F1-2. Agent 不知道屏上有什么（淘汰——已被 #4 吸收）</h3>
+<div class="field"><strong>淘汰原因：</strong>这是「xz context block 缺 ui_set 引导」的另一种表述，已被 #4 完全覆盖。重复保留无增量价值。</div>
+</div>
+
+<div class="idea-card cut">
+<h3>F2-2. stable surface id 自动生成（淘汰——实现细节非想法）</h3>
+<div class="field"><strong>淘汰原因：</strong>自动 id 生成（<code>xz-today-{date}</code>）是 #1 投影层的实现细节，不构成独立的方向选择。属于 ce-plan 层面的技术决策。</div>
+</div>
+
+<div class="idea-card cut">
+<h3>F2-3. 查询结果阅后即焚 TTL（淘汰——与 #2 工作台矛盾）</h3>
+<div class="field"><strong>淘汰原因：</strong>TTL 自动退场与 #2「持续在场工作台」直接矛盾——工作台需要持久在场，TTL 会把它收掉。TTL 适合单次查询卡，但 #2 的复合面板范式更优。如选 #1 单卡路径，TTL 可作为实现细节保留。</div>
+</div>
+
+<div class="idea-card cut">
+<h3>F3-3. Agent 不需要看完整 CLI stdout（淘汰——风险过高）</h3>
+<div class="field"><strong>淘汰原因：</strong>「投影给用户但不全量返回 Agent」改变了工具结果语义，可能导致 Agent 基于不完整信息做错误决策（如用户问「今天第三个预约是谁」时 Agent 不知道）。manifest 回注设计已有摘要机制，不需要截断工具结果。风险/收益比不划算。</div>
+</div>
+
+<div class="idea-card cut">
+<h3>F4-2. 补 form kind（降级——依赖过重）</h3>
+<div class="field"><strong>淘汰原因（降级为 deferred）：</strong>form kind 确实缺失，但创建预约的表单需求可以用 #3 的 confront choice 确认流替代（Agent 逐字段收集→确认卡）。补 form kind 工程量大（需完整实现 render/submit/字段验证），收益场景窄。作为 deferred——如果未来需要复杂多字段表单再补。</div>
+</div>
+
+<div class="idea-card cut">
+<h3>F5-2. Git CLI→IDE 可视化双通道（淘汰——已由 #1 覆盖）</h3>
+<div class="field"><strong>淘汰原因：</strong>「CLI 保留给脚本，surface 给交互」的双通道理念已被 #1 投影层隐含实现——投影层就是那个「交互通道适配器」。作为独立想法无增量。</div>
+</div>
+
+<div class="idea-card cut">
+<h3>X2. 投影层+映射表+context 三件套（淘汰——合并到 #1+#4）</h3>
+<div class="field"><strong>淘汰原因：</strong>cross-cutting 综合 X2 是 #1 + #4 的组合表述，不是新方向。已在 ranked list 里通过 #1 和 #4 并列体现。</div>
+</div>
+
+<hr>
+
+<h2>📊 轴覆盖检查</h2>
+
+<table style="width:100%;border-collapse:collapse;font-size:.9em;">
+<tr style="background:#f0f0f0;"><th style="padding:6px;border:1px solid #ddd;text-align:left;">轴</th><th style="padding:6px;border:1px solid #ddd;">覆盖想法</th></tr>
+<tr><td style="padding:6px;border:1px solid #ddd;"><strong>A 呈现粒度</strong></td><td style="padding:6px;border:1px solid #ddd;">#2 工作台、#5 list kind、#6 脱敏</td></tr>
+<tr><td style="padding:6px;border:1px solid #ddd;"><strong>B 交互模式</strong></td><td style="padding:6px;border:1px solid #ddd;">#3 confront 确认</td></tr>
+<tr><td style="padding:6px;border:1px solid #ddd;"><strong>C 数据流路径</strong></td><td style="padding:6px;border:1px solid #ddd;">#1 投影层、#4 context 引导</td></tr>
+<tr><td style="padding:6px;border:1px solid #ddd;"><strong>D 场景类型</strong></td><td style="padding:6px;border:1px solid #ddd;">#2 查询、#3 写操作、#7 错误处理</td></tr>
+</table>
+
+<p style="font-size:.85em;color:var(--ink2);margin-top:.5em;">4/4 轴覆盖，无空轴。</p>
+
+<hr>
+
+<h2>🗺️ 推荐路径</h2>
+
+<div class="idea-card">
+<p><strong>最小可行路径（快速见效）：</strong>#4（context 引导）→ #3（写操作确认）。低复杂度，不改架构，1-2 天可见效。</p>
+<p><strong>完整路径（架构级）：</strong>#1（投影层基础设施）→ #5（list kind）→ #2（临床工作台）→ #3（写操作确认）→ #6（脱敏）。中高复杂度，但一劳永逸。</p>
+<p><strong>建议：</strong>从 #4 + #3 起步验证可行性，然后投入 #1 作为基础设施，最后叠加 #2 工作台作为旗舰特性。</p>
+</div>
+
+</body>
+</html>

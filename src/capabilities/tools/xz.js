@@ -40,3 +40,22 @@ export async function execXzNotes({ command, args } = {}, context = {}) {
   const bin = resolveXzNotesBin()
   return await execCommandNoShell({ bin, args: buildArgv(command, args) }, context)
 }
+
+// 不可逆写操作检测：这些 command 有副作用且不可撤销，需要用户 confront 确认后才执行。
+// 返回 { irreversible: true, label } 或 { irreversible: false }。
+// label 用于确认卡片的摘要文案。
+const XZ_IRREVERSIBLE_PATTERNS = [
+  { tool: 'xz_calendar', re: /^appointment\s+(create|cancel)\b/i, label: '创建/取消预约' },
+  { tool: 'xz_calendar', re: /^(appointment\s+)?mark-paid\b/i, label: '缴费状态变更' },
+  { tool: 'xz_notes', re: /^note\s+(confirm|reject)\b/i, label: '笔记确认/拒绝' },
+]
+
+export function checkXzIrreversible(toolName, command) {
+  const cmd = String(command || '').trim()
+  for (const p of XZ_IRREVERSIBLE_PATTERNS) {
+    if (p.tool === toolName && p.re.test(cmd)) {
+      return { irreversible: true, label: p.label }
+    }
+  }
+  return { irreversible: false }
+}

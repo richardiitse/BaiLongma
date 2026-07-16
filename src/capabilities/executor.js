@@ -34,7 +34,7 @@ import { execInstallSoftware, listSoftwareInstallJobs } from './tools/software-i
 import { execBrowserRead, execFetchUrl, execWebSearch } from './tools/web.js'
 import { execDowngradeMemory, execMergeMemories, execProbeMemory, execRecallMemory, execSearchMemory, execSkipConsolidation, execSkipRecognition, execUpsertMemory } from './tools/memory.js'
 import { execManageReminder } from './tools/reminders.js'
-import { execXzCalendar, execXzNotes } from './tools/xz.js'
+import { execXzCalendar, execXzNotes, checkXzIrreversible } from './tools/xz.js'
 import { execGenerateImage, execGenerateLyrics, execGenerateMusic, execMediaMode, execMusic, execSpeak } from './tools/media.js'
 import { execAnalyzeImage, execManageApiCapability, execRunApiCapability } from './tools/api-capability.js'
 import { execManageRule } from './tools/rules.js'
@@ -239,9 +239,9 @@ async function executeToolUnchecked(name, args, context = {}) {
       case 'run_cli':
         return await execRunCli(args, context)
       case 'xz_calendar':
-        return await execXzCalendar(args, context)
+        return await execXzWithConfirm('xz_calendar', execXzCalendar, args, context)
       case 'xz_notes':
-        return await execXzNotes(args, context)
+        return await execXzWithConfirm('xz_notes', execXzNotes, args, context)
       case 'exec_quick_command':
         return await execShellToolAndMaybeCloseWritePreview(execQuickCommand, args, context)
       case 'exec_task_command':
@@ -1117,6 +1117,36 @@ function execConnectFeishu() {
     ok: true,
     status: 'popup_shown',
     message: '已弹出飞书连接配置界面（含分步引导 + App ID/Secret 输入框 + 打开飞书开放平台按钮）。请引导用户：去飞书开放平台创建企业自建应用、加机器人能力和 im:message 权限、在「事件订阅」选「使用长连接接收事件」并订阅 im.message.receive_v1（不要开加密推送），把 App ID 和 App Secret 填进弹窗点连接即可，无需公网地址。',
+  })
+}
+
+// xz 不可逆写操作确认拦截：检测到不可逆 command 时弹 confront choice 卡片，
+// pending 存 {tool, args}，用户确认后 scene intent handler 取出 pending 真正执行。
+// 仿 execSetSecurity 的 choice+confront+pending+返回 message 四件套。
+async function execXzWithConfirm(toolName, execFn, args, context) {
+  const { irreversible, label } = checkXzIrreversible(toolName, args?.command)
+  if (!irreversible) return execFn(args, context)
+  if (sceneClientCount() === 0) return execFn(args, context)  // 无界面客户端时直接执行（无法弹卡）
+
+  const id = `xz-confirm-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`
+  sceneStore.set(id, {
+    kind: 'choice',
+    intent: 'confront',
+    data: {
+      prompt: `确认${label}？\n工具：${toolName}  命令：${args?.command || ''}`,
+      options: [
+        { value: 'confirm', label: '确认执行', tone: 'danger' },
+        { value: 'cancel',  label: '取消', tone: 'default' },
+      ],
+      pending: { tool: toolName, args },
+    },
+  })
+  emitEvent('action', { tool: toolName, summary: `等待用户确认${label}`, detail: id })
+  return toolJson({
+    ok: true,
+    id,
+    status: 'pending_confirmation',
+    message: `确认 surface 已挂出（kind=choice，居中聚焦，等待用户确认${label}）。用户在屏幕上直接看到了，不需要你再 send_message 复述。用户点确认/取消后系统会通知你结果。`,
   })
 }
 
