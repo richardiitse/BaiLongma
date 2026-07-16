@@ -25,6 +25,8 @@
 // =============================================================================
 
 import { isSoftwareInstallRequest, SOFTWARE_INSTALL_TRIGGERS } from '../software-install-intent.js'
+import { isXzToolsEnabled } from '../config.js'
+import { getXzCalendarDocs, getXzNotesDocs } from './tools/xz-loader.js'
 import { buildHotspotRuntimeContext } from '../hotspots.js'
 import { buildWorldcupRuntimeContext } from '../worldcup.js'
 import { buildTyphoonRuntimeContext } from '../typhoon.js'
@@ -61,6 +63,17 @@ const WORLDCUP_TRIGGERS = [
 const TYPHOON_TRIGGERS = [
   '台风', '热带气旋', '台风路径', '台风预警', '风圈', '登陆台风', 'typhoon', 'tropical cyclone',
 ]
+
+// xz 系列：心理咨询日历/笔记 CLI 工具。从 tool-router.js 迁移至此（U3）。
+// 触发词聚焦咨询师领域，避免与通用 reminder 日程重叠。
+const XZ_TOOLS = ['xz_calendar', 'xz_notes']
+const XZ_TRIGGERS = [
+  '来访者', '咨询师', '心理咨询', '会期', '预约', '排班', '档期', '缴费', '收款', '付款状态',
+  '临床笔记', '会谈记录', '临床记录', 'soap', '归档', '档案', '知情同意', '脱敏', '会诊记录',
+  'xz', '日历', '笔记',
+  'calendar', 'appointment', 'counsel', 'clinical note', 'session note',
+]
+const XZ_KEYWORD_RE = /来访者|咨询师|心理咨询|会期|预约|排班|档期|缴费|收款|付款状态|临床笔记|会谈记录|临床记录|soap|归档|档案|知情同意|脱敏|会诊记录|xz|日历|笔记|calendar|appointment|counsel|clinical note|session note/i
 
 const WEATHER_KEYWORD_RE = /天气|温度|气温|下雨|降雨|下雪|台风|雾霾|阴天|晴天|多云|wttr|weather/i
 const HOTSPOT_KEYWORD_RE = /热点|热搜|热门|新闻|今日|趋势|榜单|头条|热议|微博热搜|trending|headline/i
@@ -193,6 +206,32 @@ export const CAPABILITIES = [
     context: SOFTWARE_INSTALL_CONTEXT_BLOCK,
     prefeed: null,
   },
+  {
+    id: 'xz-tools',
+    label: '心理咨询工具',
+    summary: 'xz_calendar（来访者/预约/缴费）+ xz_notes（临床笔记/归档/安全）本机 CLI',
+    triggers: XZ_TRIGGERS,
+    tools: XZ_TOOLS,
+    detect: (ctx) => isXzToolsEnabled() && XZ_KEYWORD_RE.test(ctx.rawText || ''),
+    isEnabled: () => isXzToolsEnabled(),
+    // context 从 xz 项目的 SKILL.md / AGENTS.md 动态加载（xz-loader.js）。
+    // 加载失败回退到硬编码概述。用函数形式让 capabilityContextBlocks 支持 lazy 求值。
+    context: () => {
+      const calDocs = getXzCalendarDocs()
+      const notesDocs = getXzNotesDocs()
+      const parts = []
+      if (calDocs?.contextBlock) parts.push(calDocs.contextBlock)
+      if (notesDocs?.contextBlock) parts.push(notesDocs.contextBlock)
+      if (parts.length === 0) {
+        return '### xz 心理咨询工具\n你有 xz_calendar 和 xz_notes 两个工具。接口都是 { command, args }。写操作建议附 --json。'
+      }
+      return parts.join('\n\n---\n\n')
+    },
+    slashCommand: {
+      cmd: '/xz', keys: ['xz', '工具', '日历', '笔记', 'tool'],
+      label: '切换 xz 工具', desc: '开启/关闭 xz-calendar / xz-notes',
+    },
+  },
 ]
 
 const CAPABILITY_BY_ID = new Map(CAPABILITIES.map(c => [c.id, c]))
@@ -222,12 +261,20 @@ export function capabilityToolsFor(ctx = {}) {
 }
 
 // 本轮要注入的工作流块（detect 命中且能力有 context）。
+// context 可以是字符串或返回字符串的函数（支持动态加载，如 xz 文档）。
 export function capabilityContextBlocks(ctx = {}) {
   const blocks = []
   for (const c of selectActiveCapabilities(ctx)) {
-    if (c.context) blocks.push(c.context)
+    if (!c.context) continue
+    const block = typeof c.context === 'function' ? safeCallStr(c.context) : c.context
+    if (block) blocks.push(block)
   }
   return blocks
+}
+
+// 安全调用 context 函数，失败返回空字符串
+function safeCallStr(fn) {
+  try { return String(fn() || '') } catch { return '' }
 }
 
 // 运行时数据预喂：跑所有能力的 prefeed（自门控，非相关返回空），并发 await。
@@ -249,6 +296,15 @@ export async function runCapabilityPrefeed(ctx = {}) {
 }
 
 // 自感知 / find_tool 用的能力清单。
+// enabled 字段：capability 可声明 isEnabled()（配置层面的开关），省略时默认 true。
+// 与 detect() 正交——detect 是"本轮关键词是否命中"，isEnabled 是"这个功能是否开启"。
+// 统一的 enabled 计算：capability 可声明 isEnabled()（配置层面开关），省略时默认 true。
+// 两处消费（listCapabilities + findCapabilitiesByQuery）共用，避免逻辑漂移。
+function capabilityEnabled(c) {
+  if (!c.isEnabled) return true
+  try { return !!c.isEnabled() } catch { return true }
+}
+
 export function listCapabilities() {
   return allCapabilities().map(c => ({
     id: c.id,
@@ -257,6 +313,8 @@ export function listCapabilities() {
     tools: [...(c.tools || [])],
     triggers: [...(c.triggers || [])],
     hasContext: !!c.context,
+    enabled: capabilityEnabled(c),
+    slashCommand: c.slashCommand || null,
   }))
 }
 
@@ -273,7 +331,7 @@ export function findCapabilitiesByQuery(query = '') {
     const hay = `${c.id} ${c.label} ${c.summary}`.toLowerCase()
     const hitText = terms.some(t => t.length >= 2 && hay.includes(t))
     if (hitTrigger || hitText) {
-      matched.push({ id: c.id, label: c.label, summary: c.summary, tools: [...(c.tools || [])], context: c.context || '' })
+      matched.push({ id: c.id, label: c.label, summary: c.summary, tools: [...(c.tools || [])], context: c.context || '', enabled: capabilityEnabled(c) })
     }
   }
   return matched

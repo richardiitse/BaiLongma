@@ -15,6 +15,22 @@ if (IS_WIN) {
   } catch (_) {}
 }
 
+// 加载项目根 .env 到 process.env（Electron 不支持 --env-file flag，必须手动加载）。
+// 只在 KEY 不存在时设置（不覆盖已有的环境变量）。开发模式下读仓库根 .env。
+try {
+  const envPath = path.join(__dirname, '..', '.env')
+  const envText = fs.readFileSync(envPath, 'utf-8')
+  for (const line of envText.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const eq = trimmed.indexOf('=')
+    if (eq < 1) continue
+    const key = trimmed.slice(0, eq).trim()
+    const val = trimmed.slice(eq + 1).trim()
+    if (!(key in process.env)) process.env[key] = val
+  }
+} catch (_) { /* .env 不存在或不可读 — 静默跳过 */ }
+
 const { app, BrowserWindow, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard } = require('electron')
 const path = require('path')
 const fs = require('fs')

@@ -1,7 +1,7 @@
 import { nowTimestamp } from './time.js'
 import { buildAgentContextBlock } from './agents/registry.js'
 import { CODING_BLOCK, DIAGNOSE_BLOCK, shouldInjectCoding, shouldInjectDiagnose } from './prompt-blocks/coding-discipline.js'
-import { capabilityContextBlocks } from './capabilities/capability-registry.js'
+import { capabilityContextBlocks, listCapabilities } from './capabilities/capability-registry.js'
 import { CAPABILITY_DEMO_PROMPT_BLOCK, shouldInjectCapabilityDemo } from './capability-demo-intent.js'
 import { formatUserProfileForPrompt } from './profile/format.js'
 import { getAppVersion } from './version.js'
@@ -627,6 +627,18 @@ Sandbox status is injected every turn in <context><runtime> as "Sandbox Status".
   for (const block of capabilityContextBlocks(capCtx)) {
     prompt += `\n\n${block}`
   }
+
+  // 能力清单（常驻）——让 Agent 每轮都知道自己有哪些能力域，即使当前轮没注入对应工具。
+  // 关闭的能力标注"（未启用）"，Agent 可引导用户去设置开启。
+  // 极简：每行一个能力域（label + summary），不展开子命令细节。
+  // try/catch 保护：buildSystemPrompt 在每轮热路径上，不能因清单渲染失败而中断。
+  try {
+    const caps = listCapabilities()
+    if (caps.length > 0) {
+      const lines = caps.map(c => `- ${c.label} — ${c.summary}${c.enabled ? '' : '（未启用）'}`)
+      prompt += `\n\n## 你的能力域\n以下是你已注册的能力域。当前轮可能只注入了部分工具，其余可通过 find_tool 按需加载。标"未启用"的能力需用户在设置中开启：\n${lines.join('\n')}`
+    }
+  } catch { /* 清单渲染失败不影响 prompt 构建 */ }
 
   // Video Mode
   if (shouldInjectVideo(userMessage)) {
