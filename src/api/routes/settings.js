@@ -15,6 +15,7 @@ import {
   getTTSConfig,
   getVoiceConfig,
   getWebSearchConfig,
+  getXzToolsConfig,
   saveLLMSettings,
   setEmbeddingConfig,
   setMinimaxKey,
@@ -26,6 +27,7 @@ import {
   setTTSConfig,
   setVoiceConfig,
   setWebSearchConfig,
+  setXzToolsConfig,
   switchModel,
 } from '../../config.js'
 import { EMBEDDING_PROVIDER_PRESETS } from '../../config.js'
@@ -34,6 +36,7 @@ import { getAgentName, validateAgentName } from '../agent.js'
 import { jsonResponse, readJsonBody } from '../utils.js'
 import { setConfig } from '../../db.js'
 import { getMapServiceSettings, setMapServiceSettings } from '../../map-service.js'
+import { listCapabilities } from '../../capabilities/capability-registry.js'
 
 function checkLocalOrToken(req, res, url, requireLocalOrToken) {
   if (typeof requireLocalOrToken === 'function') return requireLocalOrToken(req, res, url)
@@ -294,6 +297,32 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
     } catch (err) {
       jsonResponse(res, 400, { ok: false, error: err.message })
     }
+    return true
+  }
+
+  if (req.method === 'GET' && url.pathname === '/settings/xz-tools') {
+    jsonResponse(res, 200, { ok: true, xzTools: getXzToolsConfig() })
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/settings/xz-tools') {
+    try {
+      const body = await readJsonBody(req)
+      const xzTools = setXzToolsConfig(body)
+      jsonResponse(res, 200, { ok: true, xzTools })
+    } catch (err) {
+      jsonResponse(res, 400, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  // 斜杠命令注册表：返回 capability-registry 中声明了 slashCommand 的条目。
+  // 浏览器端 fetch 此端点后调用 registerSlashCommand 注册（run 回调在浏览器端定义）。
+  if (req.method === 'GET' && url.pathname === '/settings/slash-commands') {
+    const commands = listCapabilities()
+      .filter(c => c.slashCommand && c.enabled)
+      .map(c => c.slashCommand)
+    jsonResponse(res, 200, { ok: true, commands })
     return true
   }
 

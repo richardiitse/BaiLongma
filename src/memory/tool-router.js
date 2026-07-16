@@ -30,6 +30,7 @@
 // 已迁能力的工具名 + 工具注入选择器由能力注册表提供（单向依赖：registry 不 import 本文件）。
 import { WEB_TOOLS, capabilityToolsFor } from '../capabilities/capability-registry.js'
 import { shouldInjectCapabilityDemo } from '../capability-demo-intent.js'
+import { isXzToolsEnabled } from '../config.js'
 
 // ---- 工具分组 ----
 //
@@ -163,6 +164,13 @@ const CAPABILITY_DEMO_TRIGGERS = [
   'what can you do', 'capability demo', 'show capability',
 ]
 
+// list_tools 发现触发词：用户询问工具/能力清单时注入 list_tools（不连带注入全部 ADMIN_TOOLS）。
+const CAPABILITY_QUERY_TOOLS    = ['list_tools']
+const CAPABILITY_QUERY_TRIGGERS = [
+  '你有哪些工具', '你有什么工具', '工具列表', '列出工具', '什么工具',
+  'list tools', 'what tools', 'show tools',
+]
+
 const ADMIN_TRIGGERS = [
   '装一下', '安装', '装个', '卸载', '装好', '装上', '工具市场', '插件',
   '自写工具', '自己写工具', '工具工厂', '工具审核', '生成工具', '注册工具',
@@ -226,6 +234,7 @@ export const TOOL_GROUPS = [
   { triggers: MUSIC_GEN_TRIGGERS,    tools: [MM_GEN_TOOLS.music] },
   { triggers: IMAGE_GEN_TRIGGERS,    tools: [MM_GEN_TOOLS.image] },
   { triggers: REVIEW_TRIGGERS,       tools: REVIEW_TOOLS },
+  { triggers: CAPABILITY_QUERY_TRIGGERS, tools: CAPABILITY_QUERY_TOOLS },
 ]
 
 // 通用辅助：消息正文里是否含有给定触发词之一（lower-case 包含）。
@@ -321,7 +330,9 @@ export function selectTools(ctx = {}) {
   const out = new Set(CORE_TOOLS)
   // 被显式抑制的工具名:ActionLog 保活 / installed 列表 / fallback 兜底都要跳过,
   // 最后一道 delete 兜底,确保不被任何路径加回来。用于跨 turn 抑制 set_tick_interval 等，以及挡住已移除的旧工具名。
+  // xz 工具关闭时也加入抑制集——防止 ActionLog 保活把上一轮（开关还开着时）调过的 xz 工具捞回来。
   const suppressed = new Set(['generate_video'])
+  if (!isXzToolsEnabled()) { suppressed.add('xz_calendar'); suppressed.add('xz_notes') }
 
   // 任务控制：有任务 → 全组；没任务 → 仅 set_task（用户能开任务）
   for (const t of (hasTask ? TASK_CTRL_FULL : TASK_CTRL_OPENER)) out.add(t)
@@ -396,6 +407,10 @@ export function selectTools(ctx = {}) {
   // 成果审视：有任务时已随 TASK_CTRL_FULL 注入；这里覆盖"无任务但用户明确要求检查/验收成果"的临时场景。
   if (hits(body, REVIEW_TRIGGERS)) {
     for (const t of REVIEW_TOOLS) out.add(t)
+  }
+  // 用户问"你有哪些工具"时注入 list_tools（不连带注入全部 ADMIN_TOOLS 的重 schema）。
+  if (hits(body, CAPABILITY_QUERY_TRIGGERS)) {
+    for (const t of CAPABILITY_QUERY_TOOLS) out.add(t)
   }
   // Tick 不再因为"它是 Tick"就预先装载 web/filesystem/reminder/prefetch/hotspot。
   // 主模型先判断要做什么，再通过常驻 find_tool 加载所需能力。记忆和 cadence

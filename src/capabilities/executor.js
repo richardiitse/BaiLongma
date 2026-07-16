@@ -16,6 +16,7 @@ import { setUserLocation } from '../weather.js'
 import { getAgentById, isDelegationAllowed } from '../agents/registry.js'
 import { installTool, uninstallTool, listInstalledTools, isInstalledTool, executeInstalledTool, getInstalledToolSchema } from './marketplace/index.js'
 import { execManageToolFactory } from './tool-factory.js'
+import { isXzToolsEnabled } from '../config.js'
 import { TOOL_SCHEMAS } from './schemas.js'
 import { isCliAllowed, getCliEntry, listAllowedClis } from '../cli-whitelist.js'
 import { TOOL_GROUPS } from '../memory/tool-router.js'
@@ -33,6 +34,7 @@ import { execInstallSoftware, listSoftwareInstallJobs } from './tools/software-i
 import { execBrowserRead, execFetchUrl, execWebSearch } from './tools/web.js'
 import { execDowngradeMemory, execMergeMemories, execProbeMemory, execRecallMemory, execSearchMemory, execSkipConsolidation, execSkipRecognition, execUpsertMemory } from './tools/memory.js'
 import { execManageReminder } from './tools/reminders.js'
+import { execXzCalendar, execXzNotes } from './tools/xz.js'
 import { execGenerateImage, execGenerateLyrics, execGenerateMusic, execMediaMode, execMusic, execSpeak } from './tools/media.js'
 import { execAnalyzeImage, execManageApiCapability, execRunApiCapability } from './tools/api-capability.js'
 import { execManageRule } from './tools/rules.js'
@@ -236,6 +238,10 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execShellToolAndMaybeCloseWritePreview(execCommand, args, context)
       case 'run_cli':
         return await execRunCli(args, context)
+      case 'xz_calendar':
+        return await execXzCalendar(args, context)
+      case 'xz_notes':
+        return await execXzNotes(args, context)
       case 'exec_quick_command':
         return await execShellToolAndMaybeCloseWritePreview(execQuickCommand, args, context)
       case 'exec_task_command':
@@ -481,7 +487,8 @@ function execListTools() {
     .map(([name, s]) => ({ name, description: s.function.description, source: 'builtin' }))
   const installed = listInstalledTools()
   const all = [...builtins, ...installed]
-  const lines = all.map(t => `[${t.source}] ${t.name}: ${t.description}`)
+  // description 截断到 120 字符避免输出过大（与 find_tool 的 200 字符截断同理）。
+  const lines = all.map(t => `[${t.source}] ${t.name}: ${String(t.description || '').slice(0, 120)}`)
   return `共 ${all.length} 个工具（${builtins.length} 内置 + ${installed.length} 已安装）：\n\n${lines.join('\n')}`
 }
 
@@ -506,7 +513,7 @@ function execFindTool({ query } = {}) {
   //   这是「自感知按需激活」的发现半：已迁能力（web/hotspot/worldcup/software-install）的
   //   触发词与工具不在 TOOL_GROUPS，靠这里从能力注册表发现；命中时把能力的工作流(context)
   //   摘要一并回给 Agent，让它即便在关键词没进 prompt 的轮次也知道「这套工具该怎么用」。
-  const capHits = findCapabilitiesByQuery(q)
+  const capHits = findCapabilitiesByQuery(q).filter(cap => cap.enabled !== false)
   for (const cap of capHits) {
     for (const name of cap.tools) matched.add(name)
   }
@@ -527,12 +534,19 @@ function execFindTool({ query } = {}) {
     id: cap.id,
     label: cap.label,
     summary: cap.summary,
-    workflow: cap.context ? String(cap.context).replace(/\s+/g, ' ').trim().slice(0, 280) : '',
+    workflow: (() => {
+      const raw = typeof cap.context === 'function' ? (() => { try { return cap.context() || '' } catch { return '' } })() : (cap.context || '')
+      return raw ? raw.replace(/\s+/g, ' ').trim().slice(0, 280) : ''
+    })(),
   }))
 
   // 不把已是 CORE 的工具当"新发现"返回（模型本来就有），减少噪声。
   const ALWAYS_PRESENT = new Set(['find_tool', 'recall_memory', 'ui_set'])
-  const found = [...matched].filter(name => !ALWAYS_PRESENT.has(name))
+  // xz 工具受 config.xzTools.enabled 门控：关闭时 find_tool 也不能发现，
+  // 与 selectTools 的注入门对齐（否则开关关了模型仍能搜到并尝试调用）。
+  const XZ_HIDDEN = new Set(['xz_calendar', 'xz_notes'])
+  const found = [...matched].filter(name => !ALWAYS_PRESENT.has(name)
+    && (isXzToolsEnabled() || !XZ_HIDDEN.has(name)))
 
   if (found.length === 0) {
     return toolJson({

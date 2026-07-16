@@ -554,7 +554,7 @@ export function initChat({
   // 输入框以 "/" 开头时弹出命令菜单。ASR/TTS/LLM 直接打开对应设置面板；
   // 视频生成无独立面板，预填一句配置请求由 Agent 引导。
   const slashMenu = document.getElementById("slash-menu");
-  const SLASH_COMMANDS = [
+  let SLASH_COMMANDS = [
     {
       cmd: "/llm", keys: ["llm", "模型", "model"],
       label: "配置 LLM 模型", desc: "选择大模型服务商并填入 API Key",
@@ -581,6 +581,18 @@ export function initChat({
       run: showSlashHelp,
     },
   ];
+
+  // 斜杠命令注册表：允许 capability-registry 声明的命令动态注册。
+  // run 回调在浏览器端定义（不能引用服务端模块），根据 cmd 模式匹配设置。
+  const SLASH_RUN_BY_CMD = {
+    "/xz": () => openSettings?.("advanced"),
+  };
+  function registerSlashCommand(entry) {
+    if (!entry || !entry.cmd) return;
+    // 避免重复注册
+    if (SLASH_COMMANDS.some(c => c.cmd === entry.cmd)) return;
+    SLASH_COMMANDS.push({ ...entry, run: SLASH_RUN_BY_CMD[entry.cmd] || (() => {}) });
+  }
 
   let slashItems = [];    // 当前过滤后的命令
   let slashActive = -1;   // 当前高亮索引
@@ -808,6 +820,7 @@ export function initChat({
     isComposerLocked: () => inputLocked,
     isTyping,
     openChat,
+    registerSlashCommand,
     restoreChatHistory,
     send,
     unlockAudioOnFirstGesture,

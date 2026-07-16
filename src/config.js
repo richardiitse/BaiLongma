@@ -987,6 +987,12 @@ export const config = {
     allowLanAccess: false,
     updatedAt: null,
   },
+  // xz 系列工具（本机 xz-calendar / xz-notes CLI）总开关。默认关——需用户在
+  // 「设置→高级功能」显式启用后，agent 才看得到并调用得动这两个工具（注入+执行双层门）。
+  xzTools: {
+    enabled: false,
+    updatedAt: null,
+  },
 }
 
 // 迁移必须在下面读取/加载 config.json 之前跑完，确保后续逻辑看到的是已升级的结构。
@@ -1019,6 +1025,11 @@ if (parsedConfig) {
     const n = parsedConfig.network
     if (typeof n.allowLanAccess === 'boolean') config.network.allowLanAccess = n.allowLanAccess
     if (typeof n.updatedAt === 'string') config.network.updatedAt = n.updatedAt
+  }
+  if (parsedConfig.xzTools && typeof parsedConfig.xzTools === 'object') {
+    const x = parsedConfig.xzTools
+    if (typeof x.enabled === 'boolean') config.xzTools.enabled = x.enabled
+    if (typeof x.updatedAt === 'string') config.xzTools.updatedAt = x.updatedAt
   }
 }
 
@@ -1382,6 +1393,28 @@ export function setSecurity(updates) {
   if (changed) config.security.updatedAt = nowTimestamp()
   patchConfig({ security: { ...config.security } })
   return getSecurity()
+}
+
+// xz 系列工具（xz-calendar / xz-notes CLI）总开关。与 security/network 同款走 config.json 块。
+// isXzToolsEnabled 是注入层（tool-router）与执行层（executor）共用的快查函数。
+export function getXzToolsConfig() {
+  return {
+    enabled: !!config.xzTools.enabled,
+    updatedAt: config.xzTools.updatedAt || null,
+  }
+}
+
+export function setXzToolsConfig(updates) {
+  const before = config.xzTools.enabled
+  if (typeof updates.enabled === 'boolean') config.xzTools.enabled = updates.enabled
+  const changed = before !== config.xzTools.enabled
+  if (changed) config.xzTools.updatedAt = nowTimestamp()
+  patchConfig({ xzTools: { ...config.xzTools } })
+  return getXzToolsConfig()
+}
+
+export function isXzToolsEnabled() {
+  return !!config.xzTools.enabled
 }
 
 export function getNetworkConfig() {

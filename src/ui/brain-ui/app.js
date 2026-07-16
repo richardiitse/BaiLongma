@@ -2105,6 +2105,20 @@ chat = initChat({
   },
 });
 chat.applyActivationWarmupLock();
+
+// 注册 capability-registry 声明的斜杠命令（如 /xz）。
+// 浏览器端不能 import 服务端模块，通过 API 端点获取命令元数据。
+(async () => {
+  try {
+    const res = await fetch(`${API}/settings/slash-commands`);
+    const data = await res.json();
+    if (data.ok && Array.isArray(data.commands)) {
+      for (const cmd of data.commands) {
+        chat?.registerSlashCommand?.(cmd);
+      }
+    }
+  } catch {}
+})();
 if (MEMORY_GRAPH_ENABLED) {
   if (graphEl) graphEl.style.display = "block";
   loadMemories();
@@ -3114,6 +3128,8 @@ function initTTSSettings() {
       if (status) status.textContent = "读取配置失败";
       if (dot) dot.className = "settings-config-dot inactive";
     }
+    // xz 工具开关与地图同住 advanced tab，复用 advanced 的加载时机一起拉取。
+    loadXzToolsSettings();
   }
 
   if (saveMapBtn) {
@@ -3164,6 +3180,43 @@ function initTTSSettings() {
         showFeedback(mapFeedback, err.message || "清除失败", true);
       } finally {
         clearMapBtn.disabled = false;
+      }
+    });
+  }
+
+  // xz 工具总开关：GET 回填 checkbox，POST { enabled } 保存。与 web-search 同款模板。
+  const xzEnabledInput = document.getElementById("settings-xz-enabled");
+  const saveXzBtn = document.getElementById("settings-save-xz");
+  const xzFeedback = document.getElementById("settings-xz-feedback");
+
+  async function loadXzToolsSettings() {
+    try {
+      const data = await fetch(`${API}/settings/xz-tools`).then(r => r.json());
+      if (xzEnabledInput) xzEnabledInput.checked = !!data?.xzTools?.enabled;
+    } catch {}
+  }
+
+  if (saveXzBtn) {
+    saveXzBtn.addEventListener("click", async () => {
+      const enabled = !!xzEnabledInput?.checked;
+      saveXzBtn.disabled = true;
+      try {
+        const res = await fetch(`${API}/settings/xz-tools`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showFeedback(xzFeedback, "已保存");
+          loadXzToolsSettings();
+        } else {
+          showFeedback(xzFeedback, data.error || "保存失败", true);
+        }
+      } catch {
+        showFeedback(xzFeedback, "请求失败", true);
+      } finally {
+        saveXzBtn.disabled = false;
       }
     });
   }
