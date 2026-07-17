@@ -41,21 +41,36 @@ export async function execXzNotes({ command, args } = {}, context = {}) {
   return await execCommandNoShell({ bin, args: buildArgv(command, args) }, context)
 }
 
-// 不可逆写操作检测：这些 command 有副作用且不可撤销，需要用户 confront 确认后才执行。
+// 不可逆写操作检测（#12 修复：allowlist 模式）。
+// 临床写工具安全默认是"确认一切非已知读命令"——denylist 无法跟上 CLI 演进。
+// 枚举已知 READ 命令（无副作用），其余命令默认 irreversible:true（需确认）。
 // 返回 { irreversible: true, label } 或 { irreversible: false }。
-// label 用于确认卡片的摘要文案。
-const XZ_IRREVERSIBLE_PATTERNS = [
-  { tool: 'xz_calendar', re: /^appointment\s+(create|cancel)\b/i, label: '创建/取消预约' },
-  { tool: 'xz_calendar', re: /^(appointment\s+)?mark-paid\b/i, label: '缴费状态变更' },
-  { tool: 'xz_notes', re: /^note\s+(confirm|reject)\b/i, label: '笔记确认/拒绝' },
+const XZ_READ_COMMANDS = [
+  /^today\b/i,
+  /^upcoming\b/i,
+  /^overdue\b/i,
+  /^\w+\s+list\b/i,           // appointment list / client list / note list 等
+  /^payment-summary\b/i,
+  /^capabilities\b/i,
+  /^help\b/i,
+  /^doctor\b/i,
+  /^context\b/i,              // xz_notes context appointment（只读）
+  /^agent\s+(chat|test)\b/i,  // agent chat/test 是只读交互
+  /^agent-write\s+audit\s+(show|list)\b/i,  // 审计查看只读
+  /^history\b/i,
+  /^payments\b/i,             // payment 查询（非 mark-paid）
+  /^manifest\b/i,
+  /^export-reflection\b/i,
+  /^backup\s+verify\b/i,
+  /^safety\s+(consent\s+)?(list|audit)\b/i,
 ]
 
 export function checkXzIrreversible(toolName, command) {
   const cmd = String(command || '').trim()
-  for (const p of XZ_IRREVERSIBLE_PATTERNS) {
-    if (p.tool === toolName && p.re.test(cmd)) {
-      return { irreversible: true, label: p.label }
-    }
+  // allowlist：匹配已知 READ 命令 → 可逆（不确认）
+  for (const re of XZ_READ_COMMANDS) {
+    if (re.test(cmd)) return { irreversible: false }
   }
-  return { irreversible: false }
+  // 其余命令默认不可逆（需确认）——写操作、更新、删除、创建等
+  return { irreversible: true, label: `${toolName} ${cmd.split(/\s+/)[0] || ''}` }
 }

@@ -126,7 +126,8 @@ const XZ_SCENE_GUIDE = `### xz 结果投影到界面（Scene-Shell）
 - surface id 命名约定：xz-today-{YYYY-MM-DD}（今日）、xz-upcoming（即将）、xz-payments-{YYYY-MM}（缴费）、xz-clients（来访者）。
 - intent：查询结果用 "inform"（常规信息）；不要用 confront（那是写操作确认用的）。
 - 同一 id 再调 ui_set 即原地更新（幂等 morph），无需先 remove。如果 Supplemental Context 里该 surface 已存在且数据无变化，不重复调用。
-- 写操作（创建/取消预约、笔记确认、缴费变更）由系统自动弹出确认卡片，你不要自己为写操作投影 surface。`
+- 注意：today/upcoming/payment-summary 等常见查询已由 core 自动投影（projectXzSurfaceForTurn），你不需要为这些命令重复调 ui_set。只为 core 不处理的命令（如自定义查询）投影。
+- 写操作（创建/取消预约、笔记确认、缴费变更等一切非只读命令）由系统自动弹出确认卡片，用户确认后系统直接执行——你不要重新调用写操作工具，也不要自己为写操作投影 surface。`
 
 
 // 通用辅助：text 已小写，triggers 字面包含。

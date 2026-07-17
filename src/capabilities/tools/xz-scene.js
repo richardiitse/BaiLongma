@@ -8,22 +8,40 @@
 // surface 只含语义数据（kind/data/intent），不指定像素/位置/尺寸（SCENE-PROTOCOL.md §5.3）。
 
 import { config } from '../../config.js'
+import crypto from 'crypto'
 
-// ── 脱敏：redactMode 开启时，来访者姓名 → 代号（C-{哈希前4位}）─────────
+// ── 脱敏：redactMode 开启时，来访者姓名 → 代号（C-{sha256 前8位 hex}）────
+// #11 修复：从 4 位十进制（10000 桶，~118 人碰撞）改为 sha256 前 8 位 hex（~4 亿桶）。
 // 代号按姓名哈希生成，同一人多次投影代号一致。Agent 上下文不脱敏（工具结果原样）。
 const _redactCache = new Map()
 function redactName(name) {
   if (!config.xzRedactMode) return name
-  const key = String(name || '')
+  const key = String(name || '').trim()
+  if (!key) return key  // 空名不脱敏（避免 C-0000 碰撞）
   if (!_redactCache.has(key)) {
-    let hash = 0
-    for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0
-    _redactCache.set(key, 'C-' + String(Math.abs(hash)).padStart(4, '0').slice(0, 4))
+    const hash = crypto.createHash('sha256').update(key).digest('hex').slice(0, 8)
+    _redactCache.set(key, 'C-' + hash)
   }
   return _redactCache.get(key)
 }
 
-// 递归遍历 surface data，把疑似姓名的 title 字段脱敏
+// #3 修复：PII 正则——脱敏 body 中的电话号码和邮箱（不止 title）。
+const PII_PATTERNS = [
+  { re: /1[3-9]\d{9}/g, replace: '[电话]' },                    // 11 位手机号
+  { re: /\d{3}[-\s]?\d{4}[-\s]?\d{4}/g, replace: '[电话]' },    // 带分隔符电话
+  { re: /[\w.+-]+@[\w.-]+\.\w+/g, replace: '[邮箱]' },          // 邮箱
+]
+
+function redactPII(text) {
+  if (typeof text !== 'string') return text
+  let result = text
+  for (const p of PII_PATTERNS) {
+    result = result.replace(p.re, p.replace)
+  }
+  return result
+}
+
+// 递归遍历 surface data，把疑似姓名的 title 字段 + body 中 PII 脱敏
 function applyRedact(surface) {
   if (!config.xzRedactMode || !surface) return surface
   const walk = (obj) => {
@@ -33,6 +51,10 @@ function applyRedact(surface) {
     // title 字段疑似来访者姓名（text kind 的 title 常是名字）→ 脱敏
     if (typeof out.title === 'string' && out.title.length <= 20 && !out.title.includes('📋') && !out.title.includes('💰') && !out.title.includes('📝')) {
       out.title = redactName(out.title)
+    }
+    // #3 修复：body 字段脱敏 PII（电话/邮箱）+ 可能含的来访者姓名片段
+    if (typeof out.body === 'string') {
+      out.body = redactPII(out.body)
     }
     if (out.data) out.data = walk(out.data)
     if (out.children) out.children = out.children.map(walk)
@@ -233,41 +255,8 @@ export function buildXzSurface(command = '', stdout = '') {
   return null
 }
 
-// ── core 直投入口：检测 xz 查询意图 → 调 CLI → 投影 ───────────────────
-// 供 index.js 的 projectXzSurfaceForTurn 调用。
-// 返回 { id, changed } 或 null（非 xz 查询 / CLI 失败 / 无 surface）。
-export async function projectXzQuerySurface({ command, args, execFn }) {
-  if (typeof execFn !== 'function') return null
-  // 调 CLI（execXzCalendar / execXzNotes 已含 isXzToolsEnabled 门控）
-  const resultStr = await execFn({ command, args }, {})
-  // 解析工具信封 { ok, stdout, ... }
-  let envelope
-  try { envelope = JSON.parse(resultStr) } catch { return null }
-  if (!envelope || envelope.ok === false) return null  // CLI 失败（ENOENT/非零退出）→ 不投影
-
-  const surface = buildXzSurface(command, envelope.stdout)
-  if (!surface) return null
-
-  const { id, kind, data, intent } = surface
-  const changed = sceneStoreSafeSet(id, { kind, data, intent })
-  return { id, changed }
-}
-
-// 间接引用 sceneStore（避免循环依赖：xz-scene 不直接 import scene-store，
-// 由调用方注入或用动态 import）。当前用懒加载模式。
-let _sceneStore = null
-async function getSceneStore() {
-  if (_sceneStore) return _sceneStore
-  const m = await import('../../scene/scene-store.js')
-  _sceneStore = m.sceneStore
-  return _sceneStore
-}
-
-function sceneStoreSafeSet(id, surface) {
-  // 同步降级：如果 sceneStore 还没加载，返回 true（保守认为有变化）
-  if (!_sceneStore) return true
-  return _sceneStore.set(id, surface)
-}
+// （#9 修复：删除死代码 projectXzQuerySurface/getSceneStore/sceneStoreSafeSet/_sceneStore。
+// index.js 的 projectXzSurfaceForTurn 已直接用 sceneStore.set 正确投影，这些辅助函数从未被调用且 sceneStoreSafeSet 永远 no-op。）
 
 // ── 临床工作台：复合 surface（今日排班 + 待缴费 + 待编译笔记）─────────
 // 供 index.js 在 TICK 心跳时调用刷新。并发调三个 CLI，组装成一个 stack。

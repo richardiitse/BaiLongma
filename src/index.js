@@ -924,23 +924,29 @@ async function projectXzSurfaceForTurn(message = '') {
 // core 在 TICK 时检查工作台 surface 是否存在，存在则刷新（同 id morph），不存在则跳过。
 // 工作台由用户首次查询或显式请求创建（projectXzSurfaceForTurn 或 Agent ui_set），
 // TICK 只维持已在场的——不主动创建（不打扰用户）。
+// #7 in-flight 守卫：防重叠 TICK 堆积 CLI 进程。若已有刷新在跑，返回同一 promise。
+let _wbRefresh = null
 async function refreshWorkbenchIfPresent() {
+  if (_wbRefresh) return _wbRefresh  // 合并并发刷新请求
   const existing = sceneStore.get(WORKBENCH_SURFACE_ID)
   if (!existing) return null  // 工作台不在场 → 不主动创建
 
-  const surface = await buildWorkbenchSurface({
-    execCalendar: execXzCalendar,
-    execNotes: execXzNotes,
-  })
-  const changed = sceneStore.set(WORKBENCH_SURFACE_ID, {
-    kind: surface.kind,
-    data: surface.data,
-    intent: surface.intent,
-  })
-  if (changed) {
-    emitEvent('action', { tool: 'xz_workbench_refresh', summary: '工作台已刷新' })
-  }
-  return { changed }
+  _wbRefresh = (async () => {
+    const surface = await buildWorkbenchSurface({
+      execCalendar: execXzCalendar,
+      execNotes: execXzNotes,
+    })
+    const changed = sceneStore.set(WORKBENCH_SURFACE_ID, {
+      kind: surface.kind,
+      data: surface.data,
+      intent: surface.intent,
+    })
+    if (changed) {
+      emitEvent('action', { tool: 'xz_workbench_refresh', summary: '工作台已刷新' })
+    }
+    return { changed }
+  })().finally(() => { _wbRefresh = null })
+  return _wbRefresh
 }
 
 async function runTurn(input, label, msg = null) {
@@ -976,7 +982,7 @@ async function runTurn(input, label, msg = null) {
     })
 
     if (isTick) ensureStartupSelfCheckState()
-    if (isTick && isXzToolsEnabled()) refreshWorkbenchIfPresent().catch(() => {})  // 工作台刷新不阻塞 TICK 主流程
+    if (isTick && isXzToolsEnabled()) refreshWorkbenchIfPresent().catch((e) => { console.warn('[xz-workbench] refresh failed', e?.message || e) })  // #8 不阻塞但有日志
 
     const earlyConversationWindow = msg ? getRecentConversationTimeline(12, 2, { includeAbsorbed: true }) : []
     if (!isTick && tryHandleVerbatimTurn(input, msg, { finishTurn, conversationWindow: earlyConversationWindow })) {
@@ -1157,7 +1163,7 @@ async function runTurn(input, label, msg = null) {
       ? projectWeatherSurfaceForTurn(msg.content || input)
       : Promise.resolve(null)
     const xzSurfacePromise = (!isTick && msg && !silentSignal)
-      ? projectXzSurfaceForTurn(msg.content || input)
+      ? projectXzSurfaceForTurn(msg.content || input).catch(() => null)  // #6 隔离异常，防中断 runtimeInjection
       : Promise.resolve(null)
     const [runtimeInjection] = await Promise.all([runtimeInjectionPromise, weatherSurfacePromise, xzSurfacePromise])
     throwIfAborted(controller.signal)

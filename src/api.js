@@ -33,6 +33,7 @@ import {
   selectWebSocketProtocol,
   timingSafeTokenEqual,
 } from './api/websocket-security.js'
+import { execXzCalendar, execXzNotes } from './capabilities/tools/xz.js'
 
 export { emitEvent }
 
@@ -208,7 +209,7 @@ function attachSceneProtocol() {
   sceneWss.on('connection', (ws) => handleSceneConnection(ws))
 
   const SCENE_PASSIVE_INTENTS = new Set(['dismiss', 'ended', 'mounted', 'dwell'])
-  setSceneIntentHandler((msg) => {
+  setSceneIntentHandler(async (msg) => {
     const surface = msg.surface || 'scene'
     const name = msg.name || 'unknown'
     const data = msg.data || {}
@@ -244,21 +245,53 @@ function attachSceneProtocol() {
     if (name === 'select' && surface.startsWith('xz-confirm-')) {
       const pending = sceneStore.get(surface)?.data?.pending || {}
       sceneStore.set(surface, null)
+      if (!pending.tool) return  // #15 幂等守卫：第二次 select（双击/重放）surface 已 null
+      // #5 nonce 校验：intent 必须回显 pending 签发的 nonce（防未授权 WS 客户端确认）。
+      // 注意：前端 choice.js 上行 select 时带 data.nonce（由 surface data 透传）。
+      if (pending.nonce && data.nonce !== pending.nonce) {
+        console.warn('[xz-confirm] nonce mismatch, ignoring select intent')
+        return
+      }
+      // 校验 pending.tool 合法性（#14 防 SYSTEM 消息反射注入）
+      const validTools = { xz_calendar: execXzCalendar, xz_notes: execXzNotes }
+      const execFn = validTools[pending.tool]
+      if (!execFn) return  // 非法 tool 忽略
       if (data.value === 'confirm') {
-        // 用户确认后，把原始工具调用作为后台消息推入队列，Agent 下一轮会看到并重新执行（这次不再拦截）。
-        pushMessage(
-          'SYSTEM',
-          `[xz write confirmed] User confirmed ${pending.tool} ${pending.args?.command || ''}. Re-execute the tool now — the confirmation gate has passed.\n(Do NOT call send_message; just call the tool.)`,
-          'APP_SIGNAL',
-          { queue: 'background', persist: false, silent: true },
-        )
+        // KTD1: handler 直接执行 pending {tool,args}——不依赖 Agent 重新调用（消除 #1 死循环）。
+        // 仿 set_security 的 setSecurity 直调模式。结果推回 Agent 队列。
+        try {
+          const result = await execFn(pending.args || {}, {})
+          pushMessage(
+            'SYSTEM',
+            `[xz write executed] User confirmed ${pending.tool} ${pending.args?.command || ''}. The tool has been executed by the system. Result:\n${String(result).slice(0, 2000)}\n(Do NOT call send_message or retry the tool — it already ran. Use this result to continue.)`,
+            'APP_SIGNAL',
+            { queue: 'background', persist: false, silent: true },
+          )
+        } catch (err) {
+          pushMessage(
+            'SYSTEM',
+            `[xz write failed] User confirmed ${pending.tool} ${pending.args?.command || ''} but execution failed: ${err?.message || err}. Do not retry automatically.\n(Internal context refresh only. Do NOT call send_message.)`,
+            'APP_SIGNAL',
+            { queue: 'background', persist: false, silent: true },
+          )
+        }
       } else {
+        // cancel：返回明确失败信封（#13 修复——Agent 收到明确失败而非静默放弃）
         pushMessage(
           'SYSTEM',
-          `[xz write cancelled] User cancelled ${pending.tool} ${pending.args?.command || ''}. Do not retry.\n(Internal context refresh only. Do NOT call send_message.)`,
+          `[xz write cancelled] User cancelled ${pending.tool} ${pending.args?.command || ''}. The tool was NOT executed. Do not retry.\n(Internal context refresh only. Do NOT call send_message.)`,
           'APP_SIGNAL',
           { queue: 'background', persist: false, silent: true },
         )
+      }
+      return
+    }
+
+    // #10 修复：xz-cli-missing 引导卡的 open-settings 按钮处理。
+    if (name === 'select' && surface === 'xz-cli-missing') {
+      sceneStore.set(surface, null)  // 关闭引导卡
+      if (data.value === 'open-settings') {
+        emitEvent('open_settings', { tab: 'advanced' })  // 通知 UI 打开设置面板
       }
       return
     }

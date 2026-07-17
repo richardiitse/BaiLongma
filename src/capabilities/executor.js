@@ -1126,9 +1126,14 @@ function execConnectFeishu() {
 async function execXzWithConfirm(toolName, execFn, args, context) {
   const { irreversible, label } = checkXzIrreversible(toolName, args?.command)
   if (!irreversible) return execFn(args, context)
-  if (sceneClientCount() === 0) return execFn(args, context)  // 无界面客户端时直接执行（无法弹卡）
+  // #2 fail-closed：无界面客户端时不可逆写操作拒绝执行（而非静默执行），仿 execSetSecurity。
+  if (sceneClientCount() === 0) {
+    return toolJson({ ok: false, error: '当前没有界面客户端，无法确认不可逆写操作，请连接界面后再试' })
+  }
 
-  const id = `xz-confirm-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`
+  // #5 nonce：128 位 UUID 作为一次性确认令牌（替代弱的 Date.now()+3字节随机）。
+  const nonce = crypto.randomUUID()
+  const id = `xz-confirm-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`
   sceneStore.set(id, {
     kind: 'choice',
     intent: 'confront',
@@ -1138,7 +1143,7 @@ async function execXzWithConfirm(toolName, execFn, args, context) {
         { value: 'confirm', label: '确认执行', tone: 'danger' },
         { value: 'cancel',  label: '取消', tone: 'default' },
       ],
-      pending: { tool: toolName, args },
+      pending: { tool: toolName, args, nonce },
     },
   })
   emitEvent('action', { tool: toolName, summary: `等待用户确认${label}`, detail: id })
@@ -1146,7 +1151,7 @@ async function execXzWithConfirm(toolName, execFn, args, context) {
     ok: true,
     id,
     status: 'pending_confirmation',
-    message: `确认 surface 已挂出（kind=choice，居中聚焦，等待用户确认${label}）。用户在屏幕上直接看到了，不需要你再 send_message 复述。用户点确认/取消后系统会通知你结果。`,
+    message: `确认 surface 已挂出（kind=choice，居中聚焦，等待用户确认${label}）。用户确认后系统直接执行该操作并把结果推回——你无需重新调用该工具。用户在屏幕上直接看到了，不需要你再 send_message 复述。`,
   })
 }
 
