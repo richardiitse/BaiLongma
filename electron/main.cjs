@@ -31,7 +31,11 @@ try {
     const eq = trimmed.indexOf('=')
     if (eq < 1) continue
     const key = trimmed.slice(0, eq).trim()
-    const val = trimmed.slice(eq + 1).trim()
+    let val = trimmed.slice(eq + 1).trim()
+    // 剥离值两端匹配的单/双引号（支持 KEY="value" 和 KEY='value' 写法）
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1)
+    }
     if (!(key in process.env)) process.env[key] = val
   }
 } catch (e) {

@@ -1124,6 +1124,9 @@ function execConnectFeishu() {
 // pending 存 {tool, args}，用户确认后 scene intent handler 取出 pending 真正执行。
 // 仿 execSetSecurity 的 choice+confront+pending+返回 message 四件套。
 async function execXzWithConfirm(toolName, execFn, args, context) {
+  // 工具开关门控：与 execXzCalendar/execXzNotes 的 disabled() 检查对齐，
+  // 避免工具关闭时仍弹出确认卡（UX 不一致）。
+  if (!isXzToolsEnabled()) return toolJson({ ok: false, tool: toolName, error: 'xz 工具未启用（设置→高级功能）' })
   const { irreversible, label } = checkXzIrreversible(toolName, args?.command)
   if (!irreversible) return execFn(args, context)
   // #2 fail-closed：无界面客户端时不可逆写操作拒绝执行（而非静默执行），仿 execSetSecurity。

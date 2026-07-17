@@ -210,6 +210,7 @@ function attachSceneProtocol() {
 
   const SCENE_PASSIVE_INTENTS = new Set(['dismiss', 'ended', 'mounted', 'dwell'])
   setSceneIntentHandler(async (msg) => {
+   try {
     const surface = msg.surface || 'scene'
     const name = msg.name || 'unknown'
     const data = msg.data || {}
@@ -247,9 +248,9 @@ function attachSceneProtocol() {
       sceneStore.set(surface, null)
       if (!pending.tool) return  // #15 幂等守卫：第二次 select（双击/重放）surface 已 null
       // #5 nonce 校验：intent 必须回显 pending 签发的 nonce（防未授权 WS 客户端确认）。
-      // 注意：前端 choice.js 上行 select 时带 data.nonce（由 surface data 透传）。
-      if (pending.nonce && data.nonce !== pending.nonce) {
-        console.warn('[xz-confirm] nonce mismatch, ignoring select intent')
+      // fail-closed：pending.nonce 缺失也是异常（execXzWithConfirm 总会签发 nonce）。
+      if (!pending.nonce || data.nonce !== pending.nonce) {
+        console.warn('[xz-confirm] nonce missing or mismatch, ignoring select intent')
         return
       }
       // 校验 pending.tool 合法性（#14 防 SYSTEM 消息反射注入）
@@ -299,6 +300,11 @@ function attachSceneProtocol() {
     if (!SCENE_PASSIVE_INTENTS.has(name)) {
       pushMessage(`UI:${surface}`, `[UI intent surface=${surface} name=${name}]\n${JSON.stringify(data, null, 2)}`, 'APP_SIGNAL')
     }
+   } catch (e) {
+     // 整个 handler 顶层兜底：任何 I/O 失败（insertUISignal/pushMessage/emitEvent）
+     // 不应成为未捕获的 Promise rejection 导致进程崩溃或静默丢失用户点击。
+     console.warn('[scene-intent] handler error', e?.message || e)
+   }
   })
 
   return sceneWss

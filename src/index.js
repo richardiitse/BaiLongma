@@ -843,8 +843,7 @@ async function projectWeatherSurfaceForTurn(message = '') {
 // ── xz 查询意图检测 ────────────────────────────────────────────────────
 // 轻量正则复用 capability-registry 的 XZ 关键词集，但额外要求「查询类」语义
 // （今日/列表/汇总），避免把写操作（创建/取消）也当成 core 直投目标。
-const XZ_QUERY_KEYWORD_RE = /今天.*预约|今日|排班|upcoming|overdue|来访者.*列表|client list|appointment list|缴费.*汇总|payment.summary/i
-const XZ_QUERY_COMMAND_RE = /^(today|upcoming|overdue|appointment\s+list|client\s+list|payment-summary)/i
+const XZ_QUERY_KEYWORD_RE = /今天.*预约|今日|排班|upcoming|overdue|来访者.*列表|client list|appointment list|缴费.*汇总|payment.summary|payment-summary/i
 
 function isXzQueryIntent(message = '') {
   if (!isXzToolsEnabled()) return false
