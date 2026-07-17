@@ -63,6 +63,9 @@ import { formatTerminalStreamContext } from './terminal-stream.js'
 import { getWeatherCardProps, isWeatherQuery } from './weather.js'
 import { startTyphoonAlertMonitor } from './typhoon-alert-monitor.js'
 import { scheduleSceneSurfaceRemoval } from './scene/transient-surfaces.js'
+import { buildXzSurface, xzSurfaceId } from './capabilities/tools/xz-scene.js'
+import { isXzToolsEnabled } from './config.js'
+import { execXzCalendar } from './capabilities/tools/xz.js'
 
 function reportStartupProgress(id, status, detail, message) {
   try {
@@ -837,6 +840,60 @@ async function projectWeatherSurfaceForTurn(message = '') {
   return { id, data, changed }
 }
 
+// ── xz 查询意图检测 ────────────────────────────────────────────────────
+// 轻量正则复用 capability-registry 的 XZ 关键词集，但额外要求「查询类」语义
+// （今日/列表/汇总），避免把写操作（创建/取消）也当成 core 直投目标。
+const XZ_QUERY_KEYWORD_RE = /今天.*预约|今日|排班|upcoming|overdue|来访者.*列表|client list|appointment list|缴费.*汇总|payment.summary/i
+const XZ_QUERY_COMMAND_RE = /^(today|upcoming|overdue|appointment\s+list|client\s+list|payment-summary)/i
+
+function isXzQueryIntent(message = '') {
+  if (!isXzToolsEnabled()) return false
+  return XZ_QUERY_KEYWORD_RE.test(message)
+}
+
+// 从用户消息推断要执行的 xz_calendar 子命令。
+function inferXzCommand(message = '') {
+  const msg = String(message || '')
+  if (/今天|今日/.test(msg)) return 'today'
+  if (/upcoming|即将|接下来/.test(msg)) return 'upcoming'
+  if (/overdue|逾期|过期/.test(msg)) return 'overdue'
+  if (/来访者.*列表|client list/i.test(msg)) return 'client list'
+  if (/缴费.*汇总|payment.summary/i.test(msg)) return 'payment-summary'
+  if (/预约.*列表|appointment list/i.test(msg)) return 'appointment list'
+  return 'today'  // 默认 today（最高频）
+}
+
+// core 直接投影 xz 查询结果（仿 projectWeatherSurfaceForTurn 模式 A）。
+// 检测到 xz 查询意图 → 调 xz_calendar CLI → xz-scene 解析 → sceneStore.set。
+// 写操作不走这里（由 U2 的 confront 确认流处理）。
+async function projectXzSurfaceForTurn(message = '') {
+  if (!isXzQueryIntent(message)) return null
+
+  const command = inferXzCommand(message)
+  const resultStr = await execXzCalendar({ command, args: ['--json'] }, {})
+  let envelope
+  try { envelope = JSON.parse(resultStr) } catch { return null }
+  if (!envelope || envelope.ok === false) return null  // CLI 失败（ENOENT 等）→ 不投影，交 Agent 处理
+
+  const surface = buildXzSurface(command, envelope.stdout)
+  if (!surface) return null
+
+  const id = surface.id
+  const changed = sceneStore.set(id, {
+    kind: surface.kind,
+    data: surface.data,
+    intent: surface.intent || 'inform',
+  })
+  if (changed) {
+    emitEvent('action', {
+      tool: 'xz_surface',
+      summary: `已投影 xz 查询结果（${command}）`,
+      detail: id,
+    })
+  }
+  return { id, changed }
+}
+
 async function runTurn(input, label, msg = null) {
   const sessionRef = newSessionRef()
   const turnStartedAtMs = Date.now()
@@ -1049,7 +1106,10 @@ async function runTurn(input, label, msg = null) {
     const weatherSurfacePromise = (!isTick && msg && !silentSignal)
       ? projectWeatherSurfaceForTurn(msg.content || input)
       : Promise.resolve(null)
-    const [runtimeInjection] = await Promise.all([runtimeInjectionPromise, weatherSurfacePromise])
+    const xzSurfacePromise = (!isTick && msg && !silentSignal)
+      ? projectXzSurfaceForTurn(msg.content || input)
+      : Promise.resolve(null)
+    const [runtimeInjection] = await Promise.all([runtimeInjectionPromise, weatherSurfacePromise, xzSurfacePromise])
     throwIfAborted(controller.signal)
 
     // 天气卡片投影与 runRuntimeInjector 并发;显式城市天气共用 in-flight wttr.in 请求。
