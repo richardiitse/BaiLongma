@@ -27,6 +27,7 @@ import {
   setTTSConfig,
   setVoiceConfig,
   setWebSearchConfig,
+  setXzRedactMode,
   setXzToolsConfig,
   switchModel,
 } from '../../config.js'
@@ -58,6 +59,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
         models: status.models,
         temperature: config.temperature,
         thinking: config.thinking === true,
+        xzRedactMode: config.xzRedactMode === true,
         apiKey: config.apiKey || '',
       },
       providers: getProviderSummaries(),
@@ -113,6 +115,17 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
     try {
       const { thinking } = await readJsonBody(req)
       const result = setThinking(thinking)
+      jsonResponse(res, 200, { ok: true, ...result })
+    } catch (err) {
+      jsonResponse(res, 400, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/settings/xz-redact') {
+    try {
+      const { xzRedactMode } = await readJsonBody(req)
+      const result = setXzRedactMode(xzRedactMode)
       jsonResponse(res, 200, { ok: true, ...result })
     } catch (err) {
       jsonResponse(res, 400, { ok: false, error: err.message })

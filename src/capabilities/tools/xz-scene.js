@@ -7,6 +7,40 @@
 // 先例：software-install-scene.js（独立投影层 + surfaceId 函数）。
 // surface 只含语义数据（kind/data/intent），不指定像素/位置/尺寸（SCENE-PROTOCOL.md §5.3）。
 
+import { config } from '../../config.js'
+
+// ── 脱敏：redactMode 开启时，来访者姓名 → 代号（C-{哈希前4位}）─────────
+// 代号按姓名哈希生成，同一人多次投影代号一致。Agent 上下文不脱敏（工具结果原样）。
+const _redactCache = new Map()
+function redactName(name) {
+  if (!config.xzRedactMode) return name
+  const key = String(name || '')
+  if (!_redactCache.has(key)) {
+    let hash = 0
+    for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0
+    _redactCache.set(key, 'C-' + String(Math.abs(hash)).padStart(4, '0').slice(0, 4))
+  }
+  return _redactCache.get(key)
+}
+
+// 递归遍历 surface data，把疑似姓名的 title 字段脱敏
+function applyRedact(surface) {
+  if (!config.xzRedactMode || !surface) return surface
+  const walk = (obj) => {
+    if (!obj || typeof obj !== 'object') return obj
+    if (Array.isArray(obj)) return obj.map(walk)
+    const out = { ...obj }
+    // title 字段疑似来访者姓名（text kind 的 title 常是名字）→ 脱敏
+    if (typeof out.title === 'string' && out.title.length <= 20 && !out.title.includes('📋') && !out.title.includes('💰') && !out.title.includes('📝')) {
+      out.title = redactName(out.title)
+    }
+    if (out.data) out.data = walk(out.data)
+    if (out.children) out.children = out.children.map(walk)
+    return out
+  }
+  return walk(surface)
+}
+
 // ── surface id 生成（按 语义，稳定可复用）──────────────────────────────
 // 同一天调 today 两次 → 相同 id → 幂等 morph，不重建卡片。
 export function xzSurfaceId(command = '') {
@@ -183,7 +217,7 @@ export function buildXzSurface(command = '', stdout = '') {
     if (builder.match.test(cmd)) {
       const surface = builder.build(parsed, cmd)
       if (surface) {
-        return { id: xzSurfaceId(cmd), ...surface }
+        return applyRedact({ id: xzSurfaceId(cmd), ...surface })
       }
       return null
     }
@@ -191,10 +225,10 @@ export function buildXzSurface(command = '', stdout = '') {
   // 未匹配专用构建器：文本降级（JSON 则提取可读摘要）
   if (parsed.ok && parsed.json) {
     const text = JSON.stringify(parsed.json, null, 2)
-    return { id: xzSurfaceId(cmd), kind: 'text', data: { title: cmd, body: clip(text, 400) }, intent: 'inform' }
+    return applyRedact({ id: xzSurfaceId(cmd), kind: 'text', data: { title: cmd, body: clip(text, 400) }, intent: 'inform' })
   }
   if (parsed.text) {
-    return { id: xzSurfaceId(cmd), kind: 'text', data: { title: cmd, body: clip(parsed.text, 400) }, intent: 'inform' }
+    return applyRedact({ id: xzSurfaceId(cmd), kind: 'text', data: { title: cmd, body: clip(parsed.text, 400) }, intent: 'inform' })
   }
   return null
 }
@@ -280,12 +314,12 @@ export async function buildWorkbenchSurface({ execCalendar, execNotes }) {
     : '暂无'
   children.push({ id: 'wb-notes', kind: 'text', data: { title: '📝 待编译笔记', body: notesSummary } })
 
-  return {
+  return applyRedact({
     id: WORKBENCH_SURFACE_ID,
     kind: 'stack',
     data: { children, gap: 'md' },
     intent: 'ambient',
-  }
+  })
 }
 
 // 从工具信封字符串中提取 stdout（execXzCalendar 返回的是 JSON 信封）

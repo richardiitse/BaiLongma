@@ -866,6 +866,29 @@ function inferXzCommand(message = '') {
 // core 直接投影 xz 查询结果（仿 projectWeatherSurfaceForTurn 模式 A）。
 // 检测到 xz 查询意图 → 调 xz_calendar CLI → xz-scene 解析 → sceneStore.set。
 // 写操作不走这里（由 U2 的 confront 确认流处理）。
+
+// CLI 不可用时的引导卡（U6）：投影 choice+confront 卡片引导用户配置，而非纯文字报错。
+function projectXzMissingSurface(envelope) {
+  const isEnoent = envelope?.error?.includes('ENOENT') || envelope?.error?.includes('spawn')
+  const prompt = isEnoent
+    ? 'xz 工具未安装或不在 PATH 中。\n请在「设置 → 高级功能」启用 xz 工具，或确认 xz-calendar / xz-notes CLI 已安装。'
+    : `xz 工具调用失败：${envelope?.error || '未知错误'}`
+  const id = 'xz-cli-missing'
+  sceneStore.set(id, {
+    kind: 'choice',
+    intent: 'confront',
+    data: {
+      prompt,
+      options: [
+        { value: 'open-settings', label: '打开设置', tone: 'primary' },
+        { value: 'dismiss', label: '知道了', tone: 'default' },
+      ],
+    },
+  })
+  emitEvent('action', { tool: 'xz_cli_missing', summary: 'xz CLI 不可用，已弹出引导卡' })
+  return { id, changed: true, missing: true }
+}
+
 async function projectXzSurfaceForTurn(message = '') {
   if (!isXzQueryIntent(message)) return null
 
@@ -873,7 +896,10 @@ async function projectXzSurfaceForTurn(message = '') {
   const resultStr = await execXzCalendar({ command, args: ['--json'] }, {})
   let envelope
   try { envelope = JSON.parse(resultStr) } catch { return null }
-  if (!envelope || envelope.ok === false) return null  // CLI 失败（ENOENT 等）→ 不投影，交 Agent 处理
+  if (!envelope || envelope.ok === false) {
+    // CLI 不可用（ENOENT 等）→ 投影引导卡，而非纯文字报错（U6）
+    return projectXzMissingSurface(envelope)
+  }
 
   const surface = buildXzSurface(command, envelope.stdout)
   if (!surface) return null

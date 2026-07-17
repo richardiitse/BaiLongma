@@ -3400,6 +3400,28 @@ function initTTSSettings() {
     console.warn("[alert-sound] #alert-sound-toggle 未在设置 DOM 中找到——开关静默失效，请检查 app-shell.js 的设置模板");
   }
 
+  // xz 来访者脱敏开关（写后端 config，影响 surface 投影）
+  const xzRedactRow = document.getElementById("xz-redact-row");
+  const xzRedactToggle = document.getElementById("xz-redact-toggle");
+  if (xzRedactToggle) {
+    // 从 /settings 读取初始值 + 仅在 xz 工具启用时显示
+    fetch(`${API}/settings`).then(r => r.json()).then(s => {
+      if (s.llm && typeof s.llm.xzRedactMode === 'boolean') {
+        xzRedactToggle.checked = s.llm.xzRedactMode;
+        if (xzRedactRow) xzRedactRow.style.display = '';
+      }
+    }).catch(() => {});
+    xzRedactToggle.addEventListener("change", async () => {
+      try {
+        await fetch(`${API}/settings/xz-redact`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ xzRedactMode: xzRedactToggle.checked }),
+        });
+      } catch (e) { console.warn('[xz-redact] 保存失败', e); }
+    });
+  }
+
   function openSettings(tab = null) {
     overlay.hidden = false;
     loadSettings();

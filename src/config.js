@@ -977,6 +977,9 @@ export const config = {
   // 默认关闭——只有用户在设置里显式开启才思考。这是「用户显式选择」的开关，
   // 不是 runtime 按难度替模型决定开关 reasoning（那条路 index.js 已注释外掉）。
   thinking: false,
+  // xz 脱敏模式：开启后 surface 中来访者姓名显示为代号（C-001），保护隐私。
+  // Agent 上下文始终用真名（工具结果不脱敏），只 surface 投影脱敏。默认关闭。
+  xzRedactMode: false,
   security: {
     fileSandbox: true,
     execSandbox: true,
@@ -1009,6 +1012,9 @@ if (parsedConfig) {
   // 缺字段（旧版升级 / 未开启过）按默认 false 处理 —— 无需 schema 迁移。
   if (typeof parsedConfig.thinking === 'boolean') {
     config.thinking = parsedConfig.thinking
+  }
+  if (typeof parsedConfig.xzRedactMode === 'boolean') {
+    config.xzRedactMode = parsedConfig.xzRedactMode
   }
   if (parsedConfig.security && typeof parsedConfig.security === 'object') {
     const s = parsedConfig.security
@@ -1369,6 +1375,13 @@ export function setThinking(enabled) {
   config.thinking = v
   patchConfig({ thinking: v })
   return { thinking: v }
+}
+
+export function setXzRedactMode(enabled) {
+  const v = !!enabled
+  config.xzRedactMode = v
+  patchConfig({ xzRedactMode: v })
+  return { xzRedactMode: v }
 }
 
 export function getSecurity() {

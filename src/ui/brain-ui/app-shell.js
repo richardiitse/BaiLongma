@@ -218,6 +218,13 @@ const createSettingsModal = () => `
                 Jarvis 回复时的提示音（默认开）
               </label>
             </div>
+            <div class="settings-row" id="xz-redact-row" style="display:none;">
+              <label class="settings-label" for="xz-redact-toggle">来访者脱敏</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--ink2);">
+                <input type="checkbox" id="xz-redact-toggle" />
+                xz 卡片中来来访者显示代号（默认关）
+              </label>
+            </div>
           </div>
         </div>
 
