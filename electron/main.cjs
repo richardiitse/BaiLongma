@@ -15,6 +15,11 @@ if (IS_WIN) {
   } catch (_) {}
 }
 
+// require 内置模块到最前面：下面的 .env 加载块需要 path/fs，
+// 它们必须在被使用之前 require（CommonJS 模块作用域中没有全局 path/fs）。
+const path = require('path')
+const fs = require('fs')
+
 // 加载项目根 .env 到 process.env（Electron 不支持 --env-file flag，必须手动加载）。
 // 只在 KEY 不存在时设置（不覆盖已有的环境变量）。开发模式下读仓库根 .env。
 try {
@@ -29,11 +34,12 @@ try {
     const val = trimmed.slice(eq + 1).trim()
     if (!(key in process.env)) process.env[key] = val
   }
-} catch (_) { /* .env 不存在或不可读 — 静默跳过 */ }
+} catch (e) {
+  // 只静默 .env 不存在（ENOENT）的情况；其他错误（权限、语法等）应暴露，避免被伪装成"无 .env"
+  if (e.code !== 'ENOENT') console.error('[main] .env 加载失败:', e.message)
+}
 
 const { app, BrowserWindow, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard } = require('electron')
-const path = require('path')
-const fs = require('fs')
 const net = require('net')
 const http = require('http')
 const { EventEmitter } = require('events')
