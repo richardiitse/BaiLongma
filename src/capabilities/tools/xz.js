@@ -49,7 +49,7 @@ const XZ_READ_COMMANDS = [
   /^today\b/i,
   /^upcoming\b/i,
   /^overdue\b/i,
-  /^\w+\s+list\b/i,           // appointment list / client list / note list 等
+  /^(\w+\s+)?list\b/i,        // appointment list / client list / note list / bare list 等
   /^payment-summary\b/i,
   /^capabilities\b/i,
   /^help\b/i,
