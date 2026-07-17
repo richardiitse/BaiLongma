@@ -234,3 +234,78 @@ function sceneStoreSafeSet(id, surface) {
   if (!_sceneStore) return true
   return _sceneStore.set(id, surface)
 }
+
+// ── 临床工作台：复合 surface（今日排班 + 待缴费 + 待编译笔记）─────────
+// 供 index.js 在 TICK 心跳时调用刷新。并发调三个 CLI，组装成一个 stack。
+// surface id 固定 'xz-workbench'，intent=ambient（角落低调，不抢焦点）。
+// OQ2 解决：刷新频率跟随 TICK 节奏（ticker.js 的 L2 自适应间隔），不额外加节流。
+export const WORKBENCH_SURFACE_ID = 'xz-workbench'
+
+export async function buildWorkbenchSurface({ execCalendar, execNotes }) {
+  const today = new Date().toISOString().slice(0, 10)
+  // 并发调三个查询，任一失败该区域显示「暂时不可用」
+  const [todayRes, payRes, notesRes] = await Promise.allSettled([
+    execCalendar ? execCalendar({ command: 'today', args: ['--json'] }, {}) : Promise.resolve('{"ok":false}'),
+    execCalendar ? execCalendar({ command: 'payment-summary', args: ['--json'] }, {}) : Promise.resolve('{"ok":false}'),
+    execNotes ? execNotes({ command: 'context appointment', args: ['--limit', '5', '--json'] }, {}) : Promise.resolve('{"ok":false}'),
+  ])
+
+  const children = []
+
+  // 区域 1：今日排班（标题卡 + 预约明细）
+  const todayOk = todayRes.status === 'fulfilled' && envelopeOk(todayRes.value)
+  const todaySurface = todayOk ? buildXzSurface('today', safeParseStdout(todayRes.value)) : null
+  const todayItems = todaySurface?.data?.children || []
+  const todayCount = todayItems.length
+  const todayBody = !todayOk ? '暂时不可用'
+    : todayCount > 0 ? todayItems.map(c => `${c.data.title} ${c.data.body || ''}`.trim()).join('\n')
+    : '暂无预约'
+  children.push({ id: 'wb-today', kind: 'text', data: { title: `📋 今日排班 (${todayCount})`, body: clip(todayBody, 300) } })
+
+  // 区域 2：待缴费
+  const payOk = payRes.status === 'fulfilled' && envelopeOk(payRes.value)
+  const paySurface = payOk ? buildXzSurface('payment-summary', safeParseStdout(payRes.value)) : null
+  if (paySurface && paySurface.data.children?.some(c => c.kind === 'metric')) {
+    const metric = paySurface.data.children.find(c => c.kind === 'metric')
+    children.push({ id: 'wb-payment', kind: 'metric', data: { ...metric.data, label: '💰 ' + metric.data.label } })
+  } else {
+    children.push({ id: 'wb-payment', kind: 'metric', data: { label: '💰 待缴费', value: payOk ? '—' : '暂时不可用' } })
+  }
+
+  // 区域 3：待编译笔记
+  const notesOk = notesRes.status === 'fulfilled' && envelopeOk(notesRes.value)
+  const notesText = notesOk ? safeParseStdout(notesRes.value) : ''
+  const notesSummary = !notesOk ? '暂时不可用'
+    : notesText ? clip(notesText.split('\n').filter(Boolean).slice(0, 3).join('；'), 120)
+    : '暂无'
+  children.push({ id: 'wb-notes', kind: 'text', data: { title: '📝 待编译笔记', body: notesSummary } })
+
+  return {
+    id: WORKBENCH_SURFACE_ID,
+    kind: 'stack',
+    data: { children, gap: 'md' },
+    intent: 'ambient',
+  }
+}
+
+// 从工具信封字符串中提取 stdout（execXzCalendar 返回的是 JSON 信封）
+function safeParseStdout(envelopeStr) {
+  try {
+    const env = typeof envelopeStr === 'string' ? JSON.parse(envelopeStr) : envelopeStr
+    if (env && env.ok === false) return ''  // CLI 失败 → 空输出
+    return env?.stdout || ''
+  } catch {
+    return String(envelopeStr || '')
+  }
+}
+
+// 检查工具信封是否成功（ok !== false）
+function envelopeOk(envelopeStr) {
+  try {
+    const env = typeof envelopeStr === 'string' ? JSON.parse(envelopeStr) : envelopeStr
+    return !!(env && env.ok !== false)
+  } catch {
+    return false
+  }
+}
+

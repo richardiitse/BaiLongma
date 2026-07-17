@@ -63,9 +63,9 @@ import { formatTerminalStreamContext } from './terminal-stream.js'
 import { getWeatherCardProps, isWeatherQuery } from './weather.js'
 import { startTyphoonAlertMonitor } from './typhoon-alert-monitor.js'
 import { scheduleSceneSurfaceRemoval } from './scene/transient-surfaces.js'
-import { buildXzSurface, xzSurfaceId } from './capabilities/tools/xz-scene.js'
+import { buildXzSurface, xzSurfaceId, buildWorkbenchSurface, WORKBENCH_SURFACE_ID } from './capabilities/tools/xz-scene.js'
 import { isXzToolsEnabled } from './config.js'
-import { execXzCalendar } from './capabilities/tools/xz.js'
+import { execXzCalendar, execXzNotes } from './capabilities/tools/xz.js'
 
 function reportStartupProgress(id, status, detail, message) {
   try {
@@ -894,6 +894,29 @@ async function projectXzSurfaceForTurn(message = '') {
   return { id, changed }
 }
 
+// ── TICK 心跳刷新临床工作台（阶段 3 旗舰）──────────────────────────────
+// core 在 TICK 时检查工作台 surface 是否存在，存在则刷新（同 id morph），不存在则跳过。
+// 工作台由用户首次查询或显式请求创建（projectXzSurfaceForTurn 或 Agent ui_set），
+// TICK 只维持已在场的——不主动创建（不打扰用户）。
+async function refreshWorkbenchIfPresent() {
+  const existing = sceneStore.get(WORKBENCH_SURFACE_ID)
+  if (!existing) return null  // 工作台不在场 → 不主动创建
+
+  const surface = await buildWorkbenchSurface({
+    execCalendar: execXzCalendar,
+    execNotes: execXzNotes,
+  })
+  const changed = sceneStore.set(WORKBENCH_SURFACE_ID, {
+    kind: surface.kind,
+    data: surface.data,
+    intent: surface.intent,
+  })
+  if (changed) {
+    emitEvent('action', { tool: 'xz_workbench_refresh', summary: '工作台已刷新' })
+  }
+  return { changed }
+}
+
 async function runTurn(input, label, msg = null) {
   const sessionRef = newSessionRef()
   const turnStartedAtMs = Date.now()
@@ -927,6 +950,7 @@ async function runTurn(input, label, msg = null) {
     })
 
     if (isTick) ensureStartupSelfCheckState()
+    if (isTick && isXzToolsEnabled()) refreshWorkbenchIfPresent().catch(() => {})  // 工作台刷新不阻塞 TICK 主流程
 
     const earlyConversationWindow = msg ? getRecentConversationTimeline(12, 2, { includeAbsorbed: true }) : []
     if (!isTick && tryHandleVerbatimTurn(input, msg, { finishTurn, conversationWindow: earlyConversationWindow })) {
