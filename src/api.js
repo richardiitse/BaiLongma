@@ -171,6 +171,7 @@ function attachCloudASR() {
               try { ws.send(JSON.stringify({ type: 'transcript', text, is_final: isFinal, seg })) } catch {}
             },
             (errMsg) => {
+              console.warn('[cloud-asr] onError:', errMsg)
               try { ws.send(JSON.stringify({ type: 'error', message: errMsg })) } catch {}
             },
             () => { try { ws.close() } catch {} },
@@ -179,7 +180,13 @@ function attachCloudASR() {
             },
           )
           configured = true
-        } catch {}
+        } catch (e) {
+          // 原来是空 catch，导致 createCloudASRSession 抛的所有异常（凭据缺失、WS 握手失败等）
+          // 被静默吞掉——后端日志看不到、前端也收不到 error，表现为"语音没反应且无报错"。
+          // 记录日志让这类问题可诊断；仍不向客户端抛（保持 WS 不崩）。
+          console.warn('[cloud-asr] session 建立失败:', e?.message || e)
+          try { ws.send(JSON.stringify({ type: 'error', message: String(e?.message || e) })) } catch {}
+        }
         return
       }
 

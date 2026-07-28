@@ -84,6 +84,27 @@ const CLOUD_WS_URL  = 'ws://127.0.0.1:3721/voice/cloud';
 const VOICE_PROVIDER_KEY = 'jarvis-voice-provider';
 const VOICE_MIC_DEVICE_KEY = 'jarvis-voice-mic-device-id';
 
+// 连 WS 前从后端 /settings/voice 读权威 provider 并同步到 localStorage。
+// loadVoiceSettings() 只在打开设置面板时跑，应用启动/唤醒触发时不会同步——
+// 若后端 active.json 已切到 volcengine 而 localStorage 残留 'aliyun'，
+// 前端会发错的 provider，后端读不存在的凭据文件 → ASR 静默失败。
+// 这里在每次连 WS 前做一次权威读取，覆盖主连接和 barge-in 重连两条路径。
+// fetch 失败时 fallback 到 localStorage 旧值（不比现状更差）。
+async function fetchActiveVoiceProvider() {
+  try {
+    const resp = await fetch('http://127.0.0.1:3721/settings/voice');
+    const data = await resp.json();
+    const provider = data?.voice?.voiceProvider;
+    if (provider) {
+      localStorage.setItem(VOICE_PROVIDER_KEY, provider);
+      return provider;
+    }
+  } catch (e) {
+    console.warn('[voice] 同步 provider 失败，沿用 localStorage:', e?.message || e);
+  }
+  return localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun';
+}
+
 // 采集分块大小（样本数）：AudioWorklet 累积到该样本数再投递；ScriptProcessor 回退也用它。
 // 2048 @ 16kHz = 128ms/块，权衡延迟与消息/网络开销。
 const PCM_CHUNK_SAMPLES = 2048;
@@ -648,9 +669,9 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
     ws.binaryType = 'arraybuffer';
     cloudWs = ws;
 
-    ws.onopen = () => {
+    ws.onopen = async () => {
       if (cloudWs !== ws) return;
-      const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun';
+      const provider = await fetchActiveVoiceProvider();
       const lang = getLang?.()?.split('-')[0] || 'zh';
       ws.send(JSON.stringify({ type: 'config', provider, lang }));
       setStatus('listening');
@@ -667,7 +688,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
 
     ws.onmessage = (ev) => {
       if (cloudWs !== ws) return;
-      try { handleAsrMessage(JSON.parse(ev.data)); } catch {}
+      try { handleAsrMessage(JSON.parse(ev.data)); } catch (e) { console.warn('[voice] ASR 消息处理失败:', e?.message || e, ev.data); }
     };
 
     ws.onerror = () => { if (cloudWs === ws) setStatus('error'); };
@@ -889,9 +910,9 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       const bargeinWs = new WebSocket(CLOUD_WS_URL);
       bargeinWs.binaryType = 'arraybuffer';
       cloudWs = bargeinWs;
-      bargeinWs.onopen = () => {
+      bargeinWs.onopen = async () => {
         if (cloudWs !== bargeinWs) return;
-        const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun';
+        const provider = await fetchActiveVoiceProvider();
         const lang = getLang?.()?.split('-')[0] || 'zh';
         bargeinWs.send(JSON.stringify({ type: 'config', provider, lang }));
         lastInboundTs = Date.now(); // 看门狗：打断重连后给新鲜起点
@@ -902,7 +923,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       };
       bargeinWs.onmessage = (ev) => {
         if (cloudWs !== bargeinWs) return;
-        try { handleAsrMessage(JSON.parse(ev.data)); } catch {}
+        try { handleAsrMessage(JSON.parse(ev.data)); } catch (e) { console.warn('[voice] ASR 消息处理失败(barge-in):', e?.message || e, ev.data); }
       };
       bargeinWs.onerror = () => { if (cloudWs === bargeinWs) setStatus('error'); };
       bargeinWs.onclose = () => {
