@@ -1677,7 +1677,10 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   }
 
   trace.end({ messages, delivered, aborted })
-  return { content: allContent, toolResult: lastToolResult, aborted, delivered }
+  // 工具循环路径返回的 allContent 未经清洗（正常结束路径 323/349 已各自 sanitize）。
+  // 统一补一次：剥 <think>、协议标记（[MOOD]/[SET_TASK]/...）、loose internal prelude，
+  // 保证 response 事件正文与正常路径一致、用户绝不看到协议标记。
+  return { content: sanitizeAssistantReplyForDelivery(allContent), toolResult: lastToolResult, aborted, delivered }
   } finally {
     // 异常 / abort / 任何提前退出路径的兜底收尾（end 内部幂等，正常路径已 end 过则无副作用）。
     trace.end({ messages, delivered, aborted: signal?.aborted })

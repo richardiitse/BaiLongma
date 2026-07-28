@@ -108,6 +108,10 @@
       if (payload.sk) core.setStatus(payload.sk);
       core.setExternalVol(payload.vol || 0);
     }
+    else if (cmd === 'mood') {
+      // 氛围调制:主窗口 mood-ambient 推来的 ambientMood,注入球体渲染(与主窗口同步)
+      core.setAmbientMood(payload || null);
+    }
     else if (cmd === 'text') {
       if (exiting) return;
       setText((payload && payload.text) || '', !!(payload && payload.thinking));

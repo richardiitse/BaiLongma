@@ -1,10 +1,11 @@
 // 文本协议标记的单一真相源（single source of truth）。
 //
-// 模型输出文本里夹带 4 种运行时协议标记，运行时用正则提取并执行 / 剥离：
+// 模型输出文本里夹带 5 种运行时协议标记，运行时用正则提取并执行 / 剥离：
 //   [RECALL: ...]          → 主动召回请求
 //   [SET_TASK: ...]        → 设置当前任务
 //   [CLEAR_TASK]           → 清空当前任务
 //   [UPDATE_PERSONA: ...]  → 更新人格
+//   [MOOD: ...]            → 本轮情绪自表达（前端据此调制点云球，用户不可见）
 //
 // 本模块只负责「解析」与「剥离」，不做任何副作用（setConfig / insertMemory /
 // emitEvent / state 写入等业务逻辑仍留在调用方原地）。
@@ -21,6 +22,8 @@ const RECALL_PARSE = /\[RECALL:\s*(.+?)\]/
 const SET_TASK_PARSE = /\[SET_TASK:\s*([\s\S]+?)\]/
 const CLEAR_TASK_PARSE = /\[CLEAR_TASK\]/
 const UPDATE_PERSONA_PARSE = /\[UPDATE_PERSONA:\s*([\s\S]+?)\]/
+// [MOOD: focused] —— 单行词（情绪枚举），不像 SET_TASK 跨行。限字母/连字符/空格，防吞正文。
+const MOOD_PARSE = /\[MOOD:\s*([A-Za-z][A-Za-z _-]*?)\]/
 
 // ── 剥离用正则（global，用于从正文中删除）────────────────────────────
 // 与原 llm.js stripProtocolMarkersForDelivery 378-382 完全一致。
@@ -29,6 +32,7 @@ const RECALL_STRIP = /\[RECALL:\s*.+?\]/g
 const SET_TASK_STRIP = /\[SET_TASK:\s*[\s\S]+?\]/g
 const CLEAR_TASK_STRIP = /\[CLEAR_TASK\]/g
 const UPDATE_PERSONA_STRIP = /\[UPDATE_PERSONA:\s*[\s\S]+?\]/g
+const MOOD_STRIP = /\[MOOD:\s*[A-Za-z][A-Za-z _-]*?\]/g
 
 const HIGH_CONFIDENCE_INTERNAL_LINE_RE = [
   /^(?:用户|user).*?(?:刚从|切到|切回|话题|意图|可能|上下文|语音输入|问)/i,
@@ -94,10 +98,10 @@ export function stripLooseThinkingPrelude(text) {
 }
 
 /**
- * 只解析、不做副作用。提取 4 种标记的捕获值。
+ * 只解析、不做副作用。提取 5 种标记的捕获值。
  * @param {string} text 模型原始输出文本
- * @returns {{ recall: string|null, setTask: string|null, clearTask: boolean, updatePersona: string|null }}
- *   recall / setTask / updatePersona：命中则为「未经 trim 的原始捕获子串」（保持与原 match[1] 一致，
+ * @returns {{ recall: string|null, setTask: string|null, clearTask: boolean, updatePersona: string|null, mood: string|null }}
+ *   recall / setTask / updatePersona / mood：命中则为「未经 trim 的原始捕获子串」（保持与原 match[1] 一致，
  *   trim 由调用方按原逻辑自行决定）；未命中为 null。
  *   clearTask：命中为 true，否则 false。
  */
@@ -106,16 +110,18 @@ export function parseMarkers(text) {
   const recallMatch = s.match(RECALL_PARSE)
   const setTaskMatch = s.match(SET_TASK_PARSE)
   const personaMatch = s.match(UPDATE_PERSONA_PARSE)
+  const moodMatch = s.match(MOOD_PARSE)
   return {
     recall: recallMatch ? recallMatch[1] : null,
     setTask: setTaskMatch ? setTaskMatch[1] : null,
     clearTask: CLEAR_TASK_PARSE.test(s),
     updatePersona: personaMatch ? personaMatch[1] : null,
+    mood: moodMatch ? moodMatch[1] : null,
   }
 }
 
 /**
- * 剥掉 <think>/<thinking> 块（可选）和全部 4 个协议标记后返回正文。
+ * 剥掉 <think>/<thinking> 块（可选）和全部 5 个协议标记后返回正文。
  * 与原 llm.js stripProtocolMarkersForDelivery 行为完全一致（含末尾 .trim()）。
  * @param {string} text
  * @param {{ stripThink?: boolean }} [opts] stripThink 默认 true
@@ -129,6 +135,7 @@ export function stripMarkers(text, { stripThink = true } = {}) {
     .replace(SET_TASK_STRIP, '')
     .replace(CLEAR_TASK_STRIP, '')
     .replace(UPDATE_PERSONA_STRIP, '')
+    .replace(MOOD_STRIP, '')
     .trim()
 }
 

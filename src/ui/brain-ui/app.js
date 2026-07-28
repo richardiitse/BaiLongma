@@ -5,6 +5,7 @@ import { initChat, friendlyChannelLabel } from "./chat.js";
 import { initPanelCollapse } from "./panel-collapse.js";
 import { ThoughtStream } from "./thought-stream.js";
 import { initVoicePanel } from "./voice-panel.js";
+import { moodAmbientOnAgentEvent, moodAmbientSetAgentMood } from "./mood-ambient.js";
 import { initHotspot, toggleHotspot, setHotspotMode, moveVoicePanelToBody, restoreVoicePanel } from "./hotspot.js";
 import { initWorldcup, toggleWorldcup, setWorldcupMode } from "./worldcup.js";
 import { initTyphoon, toggleTyphoon, setTyphoonMode } from "./typhoon.js";
@@ -1278,6 +1279,9 @@ function extractNids(memList) {
 }
 
 function handle({ type, data = {} }) {
+  // 氛围底色层：把 SSE 事件喂给 mood-ambient（派生忙碌度/活跃度，调制点云球色温与节奏）。
+  // 只读消费，不影响任何现有 case 行为。
+  try { moodAmbientOnAgentEvent(type, data); } catch {}
   switch (type) {
     case "message_received": {
       currentPath = "l1";
@@ -1364,6 +1368,11 @@ function handle({ type, data = {} }) {
       if (sttsActive) finalizeStreamingTTS();
       if (chat.hasLiveJarvisMsg()) chat.finalizeLiveJarvisMsg(null);
       liveReplyActive = false; liveRawText = ""; liveTurnSpeak = false;
+      break;
+    case "agent_mood":
+      // 阶段 2：小白龙本轮用 [MOOD: x] 自表达的情绪 → 叠加调制点云球（在氛围底色之上）。
+      // 用户不可见，只调球的色温/节奏/呼吸。
+      moodAmbientSetAgentMood(data?.mood);
       break;
     case "processing_preempted":
       currentStream().end();

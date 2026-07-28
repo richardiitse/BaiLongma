@@ -1680,6 +1680,14 @@ async function runTurn(input, label, msg = null) {
     emitEvent('persona_updated', { persona: newPersona.slice(0, 200) })
   }
 
+  // 5b. Detect [MOOD: ...] —— Agent 本轮情绪自表达。剥离已在 markers.stripMarkers 完成
+  //     （流式 + 定稿都不让用户看见）；这里只把情绪词推给前端，用来在 ambient 底色之上
+  //     叠加一层「个性情绪」调制点云球（mood-ambient.js 的 setAgentMood）。
+  if (markers.mood !== null) {
+    const mood = markers.mood.trim().toLowerCase()
+    emitEvent('agent_mood', { mood })
+  }
+
   // 6. Detect [SET_TASK: ...] / [CLEAR_TASK]
   if (markers.setTask !== null) {
     state.task = markers.setTask.trim()

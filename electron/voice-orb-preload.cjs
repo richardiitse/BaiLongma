@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('voiceOrb', {
     ipcRenderer.on('orb:enter', () => handler('enter'))
     // 每帧:状态 + 真实音量(驱动球体跳动)
     ipcRenderer.on('orb:frame', (_e, payload) => handler('frame', payload))
+    // 氛围调制(色温/节奏/呼吸):注入 voice-core.setAmbientMood,与主窗口氛围同步
+    ipcRenderer.on('orb:mood', (_e, payload) => handler('mood', payload))
     // 识别文字 / "思考中"
     ipcRenderer.on('orb:text', (_e, payload) => handler('text', payload))
     ipcRenderer.on('orb:exit', () => handler('exit'))

@@ -10,6 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { fork, spawnSync } from 'node:child_process'
+import { sanitizeAssistantReplyForDelivery } from '../runtime/markers.js'
 import { config } from '../config.js'
 import { executeTool } from '../capabilities/executor.js'
 
@@ -111,7 +112,10 @@ function onChildMessage(m) {
       break
     case 'end':
       pendingTurns.delete(m.id); toolContextByTurn.delete(m.id)
-      turn.resolve({ content: m.content || '', toolResult: null, aborted: !!m.aborted, delivered: !!m.delivered })
+      // 与 src/llm.js callLLM 对齐：返回前剥 <think>、协议标记（[MOOD]/[SET_TASK]/...）、
+      // loose internal prelude，保证 response 事件正文干净、用户绝不看到协议标记。
+      // （worker 在系统 node 子进程，无法直接 import markers，故在主进程这一侧统一清洗。）
+      turn.resolve({ content: sanitizeAssistantReplyForDelivery(m.content || ''), toolResult: null, aborted: !!m.aborted, delivered: !!m.delivered })
       break
     case 'error':
       pendingTurns.delete(m.id); toolContextByTurn.delete(m.id)

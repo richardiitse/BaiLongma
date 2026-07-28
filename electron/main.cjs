@@ -1216,6 +1216,9 @@ ipcMain.on('wake:orb-enter', () => {
 
 ipcMain.on('wake:orb-frame', (_e, payload) => { sendToOrb('orb:frame', payload) })
 
+// 氛围调制:主窗口 mood-ambient 推给球窗(独立于唤醒会话;球窗可见即下发)
+ipcMain.on('wake:orb-mood', (_e, payload) => { sendToOrb('orb:mood', payload) })
+
 ipcMain.on('wake:orb-text', (_e, payload) => { sendToOrb('orb:text', payload) })
 
 ipcMain.on('wake:orb-exit', () => { sendToOrb('orb:exit') })
