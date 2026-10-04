@@ -98,9 +98,14 @@
     "smoke:tool-factory-web": "node scripts/smoke-tool-factory-web-e2e.mjs",
     "smoke:brain-ui": "node scripts/smoke-brain-ui.mjs",
     "smoke:social": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\scripts\\smoke-social.mjs\"",
-    "smoke:feishu-ws": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\scripts\\smoke-feishu-ws.mjs\""
+    "smoke:feishu-ws": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\scripts\\smoke-feishu-ws.mjs\"",
+    "test:reply-sanitizer": "node ./src/test-reply-sanitizer.js",
+    "test:turn-response": "node ./src/test-turn-response-convergence.js",
+    "test:llm-raw-content": "node ./src/test-llm-raw-content.js"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "^0.79.3",
+    "@earendil-works/pi-coding-agent": "^0.79.3",
     "@huggingface/transformers": "^3.0.0",
     "@larksuiteoapi/node-sdk": "^1.68.0",
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -12,6 +12,8 @@ import { remindersSchemas } from './schemas/reminders.js'
 import { agentsSchemas } from './schemas/agents.js'
 import { systemSchemas } from './schemas/system.js'
 import { apiCapabilitySchemas } from './schemas/api-capabilities.js'
+import { buildCliSchemas } from './schemas/cli.js'
+import { buildXzSchemas } from './schemas/xz.js'
 import { BUILTIN_BROWSER_ALLOWED_TOOLS } from '../mcp/chrome-devtools-server.js'
 
 export const BUILTIN_SCHEMA_GROUPS = Object.freeze([
@@ -29,6 +31,8 @@ export const BUILTIN_SCHEMA_GROUPS = Object.freeze([
   ['agents', agentsSchemas],
   ['system', systemSchemas],
   ['api-capabilities', apiCapabilitySchemas],
+  ['cli', buildCliSchemas()],
+  ['xz', buildXzSchemas()],
 ])
 
 // Reserve retired aliases and built-in browser names so installed

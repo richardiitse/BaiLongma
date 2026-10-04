@@ -50,5 +50,8 @@ contextBridge.exposeInMainWorld('jarvis', {
     orbFrame: (payload) => ipcRenderer.send('wake:orb-frame', payload),
     orbText: (payload) => ipcRenderer.send('wake:orb-text', payload),
     orbExit: () => ipcRenderer.send('wake:orb-exit'),
+    // 氛围调制(mood-ambient.js):主窗口算好氛围推给球窗,与唤醒会话无关(独立通道),
+    // 球窗哪怕不在唤醒态也能收到氛围、预先把球染上色温。仅球窗可见时才有意义。
+    orbMood: (payload) => ipcRenderer.send('wake:orb-mood', payload),
   },
 })

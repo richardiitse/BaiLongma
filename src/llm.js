@@ -68,7 +68,9 @@ function injectFoundToolSchemas(result, toolSchemas, strictEvaluation = null, to
 // 避免模块加载阶段就锁死尚未填入的 apiKey/baseURL。
 let client = null
 let clientKey = null
+let _clientOverride = null  // 测试注入：合成 OpenAI 客户端；非 null 时绕过真实创建
 function getClient() {
+  if (_clientOverride) return _clientOverride
   const signature = `${config.provider}|${config.baseURL}|${config.apiKey}`
   if (client && clientKey === signature) return client
   if (!config.apiKey) {
@@ -78,6 +80,10 @@ function getClient() {
   clientKey = signature
   return client
 }
+
+// ── 测试专用：注入合成客户端，绕过真实网络（仅 *_ForTest 路径使用）──
+export function _setClientForTest(c) { _clientOverride = c }
+export function _clearClientForTest() { _clientOverride = null }
 
 function normalizeTemperatureForProvider(temperature, model = config.model) {
   if (typeof temperature !== 'number') return temperature
@@ -102,8 +108,9 @@ function buildLLMRequestParams({ messages, toolSchemas = [], temperature, topP, 
   })
 }
 
-// 单次流式调用，返回 { content, toolCalls, aborted }
-async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream, model = config.model }) {
+// 单次流式调用，返回 { content, rawContent, toolCalls, aborted }
+// client 可选：测试注入合成客户端（无网络），优先级高于 getClient()；避免全局 _clientOverride 的并行污染。
+export async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream, model = config.model, client = null }) {
   const requestParams = sanitizeJsonForTransport(
     buildLLMRequestParams({
       model,
@@ -228,7 +235,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
 
   try {
   // create() 也放进 try：连接建立阶段就卡死时，idle 触发 → 这里抛 AbortError → 下方 catch 转成可重试的瞬时错误。
-  const stream = await getClient().responses.create(requestParams, { signal: reqController.signal })
+  const stream = await (client || getClient()).responses.create(requestParams, { signal: reqController.signal })
   for await (const event of stream) {
     armIdle()  // 收到增量，重置空闲计时（正常长流式生成因此不受影响）
     if (signal?.aborted) break
@@ -252,6 +259,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
       if (streamStarted) onStream?.({ event: 'end' })
       return {
         content: sanitizeAssistantReplyForDelivery(partial.content),
+        rawContent: partial.content,
         reasoningContent: partial.reasoningContent,
         toolCalls: partial.toolCalls,
         outputItems: partial.outputItems,
@@ -299,6 +307,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
 
   return {
     content: sanitizeAssistantReplyForDelivery(parsed.content),
+    rawContent: parsed.content,
     reasoningContent: parsed.reasoningContent,
     // Never execute arguments from a truncated response. A partial text answer
     // can still be surfaced, but an incomplete side-effect request is unsafe.
@@ -1024,6 +1033,10 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   })
 
   let allContent = ''
+  // 原始累积：与 allContent 逐轮镜像，但追加的是引擎未清洗的原文（streamOnce 的 rawContent）。
+  // 仅供 index.js runTurn 汇合点 parseMarkers 解析协议副作用；用户可见正文一律走 content/allContent
+  // （逐轮清洗过，且 loose-prelude 剥离是"文本开头"语义——多轮拼接后整串再洗会漏中段旁白）。
+  let rawAllContent = ''
   // 可挽救草稿：社交渠道第一轮已写出一条完整回复、但还没 send_message 投递时，nudge 会把它从 allContent
   // 挪进 messages 并清空 allContent（期望下一轮包 send_message 重发）。一旦下一轮 provider 卡死/被 watchdog
   // 掐断，allContent 已空、草稿就丢了——「你有意识吗」事故正是如此。这里把草稿原文留一份，
@@ -1145,27 +1158,32 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       }
       throw err
     }
-    const { content, reasoningContent, toolCalls = [], outputItems = [], incomplete = false, aborted } = roundResult
+    const { content, rawContent: roundRaw, reasoningContent, toolCalls = [], outputItems = [], incomplete = false, aborted } = roundResult
 
     trace.recordRound({ round, inputOffset: roundInputOffset, content, reasoningContent, toolCalls, aborted })
 
     // 跨轮累积 content 时的去重保护：如果新段已经是 allContent 末尾的字面重复，
     // 跳过追加，避免 [Round N: "X"] + [Round N+1: "X"] 拼成 "X\nX"。
     // 这是模型在 nudge 后重复生成时的最后一道防线（主要修复见 finalNudge 分支）。
-    const appendContent = (next) => {
-      if (!next) return
+    // rawNext 与 next 同步追加（去重判定只看清洗后文本，两侧一致跳过）；运行时合成串
+    // （nudge ack 等）无标记，raw 默认取 next。纯标记轮（sanitize 后为空）也会把原文
+    // 累积进 rawAllContent——协议副作用不因"正文恰好被剥空"而丢失。
+    const appendContent = (next, rawNext = next) => {
+      if (!next && !rawNext) return
       const trimmed = String(next).trim()
-      if (!trimmed) return
-      if (allContent && allContent.trim().endsWith(trimmed)) return
-      allContent += (allContent ? '\n' : '') + next
+      const rawTrimmed = String(rawNext).trim()
+      if (!trimmed && !rawTrimmed) return
+      if (trimmed && allContent && allContent.trim().endsWith(trimmed)) return
+      if (trimmed) allContent += (allContent ? '\n' : '') + next
+      if (rawTrimmed) rawAllContent += (rawAllContent ? '\n' : '') + rawNext
     }
 
     if (aborted) {
-      appendContent(content)
+      appendContent(content, roundRaw)
       break
     }
 
-    appendContent(content)
+    appendContent(content, roundRaw)
 
     // An incomplete Responses result may contain useful partial prose, but its
     // output state is not a safe basis for another agent/tool round. Surface
@@ -1200,6 +1218,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           && toolDiscoveryState.noCallNudges < TOOL_DISCOVERY_MAX_NO_CALL_NUDGES) {
         appendRoundOutput()
         allContent = ''
+        rawAllContent = ''
         toolDiscoveryState.noCallNudges += 1
         messages.push({
           role: 'user',
@@ -1221,6 +1240,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           const draft = allContent.trim()
           appendRoundOutput()
           allContent = ''
+          rawAllContent = ''
           actionContractNudgeCount += 1
           messages.push({
             role: 'user',
@@ -1232,6 +1252,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         // The provider kept declining to issue an action call. Do not release
         // its completion-sounding draft as if it were a result.
         allContent = `我还没有完成「${actionContract.label}」：本轮没有发起所需的实际操作。`
+        rawAllContent = allContent
         break
       }
 
@@ -1241,6 +1262,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           && containsUnsupportedCompletionClaim(allContent, actionContract) && !actionClaimNudgeUsed) {
         appendRoundOutput()
         allContent = ''
+        rawAllContent = ''
         actionClaimNudgeUsed = true
         messages.push({
           role: 'user',
@@ -1260,6 +1282,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           // Do not ask the provider (or the protocol fallback) to race the same
           // image payload again; preserve one honest failure report.
           allContent = '截图已经生成，但图片发送失败。'
+          rawAllContent = allContent
           break
         }
         // Closing a visible browser is self-evident. Keep this acknowledgement
@@ -1270,6 +1293,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         })
         if (actionContract.id === 'browser_close' && fixedReply) {
           allContent = fixedReply
+          rawAllContent = fixedReply
           break
         }
         const completionIssue = actionContractCompletionIssue(actionContract, allContent, {
@@ -1280,6 +1304,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           if (!actionCompletionNudgeUsed) {
             appendRoundOutput()
             allContent = ''
+            rawAllContent = ''
             actionCompletionNudgeUsed = true
             messages.push({
               role: 'user',
@@ -1294,6 +1319,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           allContent = verifiedActionContractReply(actionContract, actionContractEvidence, {
             successfulToolEvidence: actionContractEvidenceList,
           })
+          rawAllContent = allContent
           break
         }
       }
@@ -1313,6 +1339,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         salvageableReply = draft   // 清空 allContent 前留一份，供下一轮失败时兜底投递
         appendRoundOutput()
         allContent = ''
+        rawAllContent = ''
         messages.push({
           role: 'user',
           content: `You produced reply text but did NOT call the send_message tool. Plain assistant text in this runtime is only debug exhaust — it does not reach the user through the normal channel. To actually deliver the reply you must wrap it in a send_message tool call.\n\nYour draft was:\n"""\n${draft.slice(0, 1000)}\n"""\n\nCall send_message now with target_id = the user who sent the previous message and content = the same text (or a tightened version). Do not write more prose this turn — only invoke the tool.${INTERNAL_NUDGE_SUFFIX}`,
@@ -1338,6 +1365,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         // 同时清空 allContent，避免本轮的旁白和下一轮的回复被拼起来当一条消息发出。
         appendRoundOutput()
         allContent = ''
+        rawAllContent = ''
         messages.push({
           role: 'user',
           content: `Tool results have returned, but you have not given the user a final reply yet. Based on the available tool results, ${deliverInstruction}. If information is insufficient, explain what was found, the failure source, and the limitations; do not end silently.${localReply ? '' : ' Do NOT repeat what you just wrote in plain text — wrap your reply in a send_message call.'}${INTERNAL_NUDGE_SUFFIX}`,
@@ -1805,6 +1833,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       // "looking for a tool" sentence into the eventual user reply, whether
       // discovery succeeds, retries, or exhausts its budget.
       allContent = ''
+      rawAllContent = ''
     }
     if (toolDeliveredFinalReply) {
       return {
@@ -1854,6 +1883,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           // tool-call message remains in model context, but only the eventual
           // useful result is allowed into allContent.
           allContent = ''
+          rawAllContent = ''
           messages.push({
             role: 'user',
             content: buildToolDiscoveryRetryNudge({
@@ -1887,6 +1917,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     if (mustReply && actionContract?.runtimeOwnedReply === true
         && actionContractSatisfied && fixedActionReply && !delivered) {
       allContent = fixedActionReply
+      rawAllContent = fixedActionReply
       break
     }
     if (terminalInternalRound) break
@@ -2013,7 +2044,14 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   }
 
   trace.end({ messages, delivered, aborted })
-  return { content: allContent, toolResult: lastToolResult, aborted, delivered }
+  // content 不做顶层整串再洗：allContent 的每一轮都已在 streamOnce 内清洗（per-round
+  // sanitize），prelude/标记剥离是「文本开头」语义——多轮拼接后整串重洗会把正文
+  // 误当开头剥掉（实测吃掉 reply 前两行，test-action-contract research 断言抓到）。
+  // 与 upstream v2.2.120 返回语义一致；需要更强清洗的调用方自行调 sanitizeAssistantReplyForDelivery。
+  // rawContent 是逐轮镜像累积的【未清洗原文】（streamOnce 的 rawContent，见上方 rawAllContent）：
+  // 仅供 index.js runTurn 汇合点解析协议副作用（[MOOD]/[RECALL]/...），绝不直接交付——
+  // 曾因引擎返回前剥标记让协议静默失效，勿再从 allContent（已清洗）取值。
+  return { content: allContent, rawContent: rawAllContent || allContent, toolResult: lastToolResult, aborted, delivered }
   } finally {
     // 异常 / abort / 任何提前退出路径的兜底收尾（end 内部幂等，正常路径已 end 过则无副作用）。
     trace.end({ messages, delivered, aborted: signal?.aborted })

@@ -18,7 +18,9 @@ import { setUserLocation } from '../weather.js'
 import { getAgentById, isDelegationAllowed } from '../agents/registry.js'
 import { installTool, uninstallTool, listInstalledTools, isInstalledTool, executeInstalledTool, getInstalledToolSchema } from './marketplace/index.js'
 import { execManageToolFactory } from './tool-factory.js'
+import { isXzToolsEnabled } from '../config.js'
 import { TOOL_SCHEMAS, getToolSchema } from './schemas.js'
+import { isCliAllowed, getCliEntry, listAllowedClis } from '../cli-whitelist.js'
 import { TOOL_GROUPS } from '../memory/tool-router.js'
 import { findCapabilitiesByQuery } from './capability-registry.js'
 import { throwIfAborted } from './abort-utils.js'
@@ -29,11 +31,12 @@ import { sceneClientCount } from '../scene/scene-server.js'
 import { evaluateToolPolicy } from './tool-policy.js'
 import { inferToolStatus, writeToolAuditLog } from './tool-audit.js'
 import { execDeleteFile, execEditFile, execListDir, execMakeDir, execReadFile, execWriteFile } from './tools/filesystem.js'
-import { execBackgroundCommand, execCommand, execDownloadFile, execKillProcess, execListProcesses, execQuickCommand, execRunCommand, execTaskCommand } from './tools/shell.js'
+import { execBackgroundCommand, execCommand, execCommandNoShell, execDownloadFile, execKillProcess, execListProcesses, execQuickCommand, execRunCommand, execTaskCommand } from './tools/shell.js'
 import { execInstallSoftware, listSoftwareInstallJobs } from './tools/software-install.js'
 import { execDowngradeMemory, execMergeMemories, execProbeMemory, execRecallMemory, execSearchMemory, execSkipConsolidation, execSkipRecognition, execUpsertMemory } from './tools/memory.js'
 import { execImportKnowledge, execInspectKnowledgeSource, execManageKnowledgeRegion, execSearchKnowledge } from './tools/knowledge.js'
 import { execManageReminder } from './tools/reminders.js'
+import { execXzCalendar, execXzNotes, checkXzIrreversible } from './tools/xz.js'
 import { execGenerateImage, execGenerateLyrics, execGenerateMusic, execMediaMode, execMusic, execSpeak } from './tools/media.js'
 import { execAnalyzeImage, execManageApiCapability, execRunApiCapability } from './tools/api-capability.js'
 import { execManageRule } from './tools/rules.js'
@@ -252,6 +255,12 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execShellToolAndMaybeCloseWritePreview(execRunCommand, args, context)
       case 'exec_command':
         return await execShellToolAndMaybeCloseWritePreview(execCommand, args, context)
+      case 'run_cli':
+        return await execRunCli(args, context)
+      case 'xz_calendar':
+        return await execXzWithConfirm('xz_calendar', execXzCalendar, args, context)
+      case 'xz_notes':
+        return await execXzWithConfirm('xz_notes', execXzNotes, args, context)
       case 'exec_quick_command':
         return await execShellToolAndMaybeCloseWritePreview(execQuickCommand, args, context)
       case 'exec_task_command':
@@ -479,6 +488,30 @@ function toolJson(payload) {
   return JSON.stringify(payload, null, 2)
 }
 
+// run_cli：白名单驱动的本机 CLI 调用（exec_command 的受限安全档）。
+// 关键安全约束：args 经 execCommandNoShell 以 argv 直传 spawn(shell:false)——
+// 参数里的 `;` `$()` 反引号等都是字面量，不经 shell 解释，杜绝注入。
+// 仅 cmd 受白名单约束；args 不再拼接进 shell 字符串。
+async function execRunCli({ cmd, args } = {}, context = {}) {
+  const name = String(cmd || '').trim()
+  if (!name) return toolJson({ ok: false, error: 'cmd 必填' })
+  if (!isCliAllowed(name)) {
+    return toolJson({ ok: false, error: `cli "${name}" 不在白名单`, allowed: listAllowedClis().map(c => c.name) })
+  }
+  const entry = getCliEntry(name)
+  const bin = entry?.path || name   // path 避开 Electron PATH 缺失用户级 bin 的问题
+  // args 形态：数组（推荐）→ 原样；字符串 → 按 shell 字段拆分（仅拆分、不解释元字符）。
+  // 拆分后每个 token 作为独立 argv 传给 spawn(shell:false)，CLI 自行解析。
+  let argv
+  if (Array.isArray(args)) {
+    argv = args.map(a => String(a))
+  } else {
+    const s = String(args || '').trim()
+    argv = s ? s.split(/\s+/) : []
+  }
+  return await execCommandNoShell({ bin, args: argv }, context)
+}
+
 // ─── 工具市场执行函数 ──────────────────────────────────────────────────────────
 
 async function execInstallTool(args) {
@@ -497,7 +530,8 @@ function execListTools() {
   const installed = listInstalledTools()
   const mcp = listMcpTools()
   const all = [...builtins, ...installed, ...mcp]
-  const lines = all.map(t => `[${t.source}] ${t.name}: ${t.description}`)
+  // description 截断到 120 字符避免输出过大（与 find_tool 的 200 字符截断同理）。
+  const lines = all.map(t => `[${t.source}] ${t.name}: ${String(t.description || '').slice(0, 120)}`)
   return `共 ${all.length} 个工具（${builtins.length} 内置 + ${installed.length} 已安装 + ${mcp.length} MCP）：\n\n${lines.join('\n')}`
 }
 
@@ -522,7 +556,7 @@ function execFindTool({ query } = {}, context = {}) {
   //   这是「自感知按需激活」的发现半：已迁能力（web/hotspot/worldcup/software-install）的
   //   触发词与工具不在 TOOL_GROUPS，靠这里从能力注册表发现；命中时把能力的工作流(context)
   //   摘要一并回给 Agent，让它即便在关键词没进 prompt 的轮次也知道「这套工具该怎么用」。
-  const capHits = findCapabilitiesByQuery(q)
+  const capHits = findCapabilitiesByQuery(q).filter(cap => cap.enabled !== false)
   for (const cap of capHits) {
     for (const name of cap.tools) matched.add(name)
   }
@@ -551,12 +585,19 @@ function execFindTool({ query } = {}, context = {}) {
     id: cap.id,
     label: cap.label,
     summary: cap.summary,
-    workflow: cap.context ? String(cap.context).replace(/\s+/g, ' ').trim().slice(0, 280) : '',
+    workflow: (() => {
+      const raw = typeof cap.context === 'function' ? (() => { try { return cap.context() || '' } catch { return '' } })() : (cap.context || '')
+      return raw ? raw.replace(/\s+/g, ' ').trim().slice(0, 280) : ''
+    })(),
   }))
 
   // 不把已是 CORE 的工具当"新发现"返回（模型本来就有），减少噪声。
   const ALWAYS_PRESENT = new Set(['find_tool', 'recall_memory', 'ui_set'])
-  const found = [...matched].filter(name => !ALWAYS_PRESENT.has(name))
+  // xz 工具受 config.xzTools.enabled 门控：关闭时 find_tool 也不能发现，
+  // 与 selectTools 的注入门对齐（否则开关关了模型仍能搜到并尝试调用）。
+  const XZ_HIDDEN = new Set(['xz_calendar', 'xz_notes'])
+  const found = [...matched].filter(name => !ALWAYS_PRESENT.has(name)
+    && (isXzToolsEnabled() || !XZ_HIDDEN.has(name)))
   // Exact public tool names are the strongest possible discovery signal. Put
   // them first without dropping broader semantic matches. This prevents a
   // query such as "browser_close 关闭浏览器" from burying browser_close behind a
@@ -1207,6 +1248,44 @@ function execConnectFeishu() {
     ok: true,
     status: 'popup_shown',
     message: '已弹出飞书连接配置界面（含分步引导 + App ID/Secret 输入框 + 打开飞书开放平台按钮）。请引导用户：去飞书开放平台创建企业自建应用、加机器人能力和 im:message 权限、在「事件订阅」选「使用长连接接收事件」并订阅 im.message.receive_v1（不要开加密推送），把 App ID 和 App Secret 填进弹窗点连接即可，无需公网地址。',
+  })
+}
+
+// xz 不可逆写操作确认拦截：检测到不可逆 command 时弹 confront choice 卡片，
+// pending 存 {tool, args}，用户确认后 scene intent handler 取出 pending 真正执行。
+// 仿 execSetSecurity 的 choice+confront+pending+返回 message 四件套。
+async function execXzWithConfirm(toolName, execFn, args, context) {
+  // 工具开关门控：与 execXzCalendar/execXzNotes 的 disabled() 检查对齐，
+  // 避免工具关闭时仍弹出确认卡（UX 不一致）。
+  if (!isXzToolsEnabled()) return toolJson({ ok: false, tool: toolName, error: 'xz 工具未启用（设置→高级功能）' })
+  const { irreversible, label } = checkXzIrreversible(toolName, args?.command)
+  if (!irreversible) return execFn(args, context)
+  // #2 fail-closed：无界面客户端时不可逆写操作拒绝执行（而非静默执行），仿 execSetSecurity。
+  if (sceneClientCount() === 0) {
+    return toolJson({ ok: false, error: '当前没有界面客户端，无法确认不可逆写操作，请连接界面后再试' })
+  }
+
+  // #5 nonce：128 位 UUID 作为一次性确认令牌（替代弱的 Date.now()+3字节随机）。
+  const nonce = crypto.randomUUID()
+  const id = `xz-confirm-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`
+  sceneStore.set(id, {
+    kind: 'choice',
+    intent: 'confront',
+    data: {
+      prompt: `确认${label}？\n工具：${toolName}  命令：${args?.command || ''}`,
+      options: [
+        { value: 'confirm', label: '确认执行', tone: 'danger' },
+        { value: 'cancel',  label: '取消', tone: 'default' },
+      ],
+      pending: { tool: toolName, args, nonce },
+    },
+  })
+  emitEvent('action', { tool: toolName, summary: `等待用户确认${label}`, detail: id })
+  return toolJson({
+    ok: true,
+    id,
+    status: 'pending_confirmation',
+    message: `确认 surface 已挂出（kind=choice，居中聚焦，等待用户确认${label}）。用户确认后系统直接执行该操作并把结果推回——你无需重新调用该工具。用户在屏幕上直接看到了，不需要你再 send_message 复述。`,
   })
 }
 

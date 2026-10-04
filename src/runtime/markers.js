@@ -1,10 +1,11 @@
 // 文本协议标记的单一真相源（single source of truth）。
 //
-// 模型输出文本里夹带 4 种运行时协议标记，运行时用正则提取并执行 / 剥离：
+// 模型输出文本里夹带 5 种运行时协议标记，运行时用正则提取并执行 / 剥离：
 //   [RECALL: ...]          → 主动召回请求
 //   [SET_TASK: ...]        → 设置当前任务
 //   [CLEAR_TASK]           → 清空当前任务
 //   [UPDATE_PERSONA: ...]  → 更新人格
+//   [MOOD: ...]            → 本轮情绪自表达（前端据此调制点云球，用户不可见）
 //
 // 本模块只负责「解析」与「剥离」，不做任何副作用（setConfig / insertMemory /
 // emitEvent / state 写入等业务逻辑仍留在调用方原地）。
@@ -21,6 +22,8 @@ const RECALL_PARSE = /\[RECALL:\s*(.+?)\]/
 const SET_TASK_PARSE = /\[SET_TASK:\s*([\s\S]+?)\]/
 const CLEAR_TASK_PARSE = /\[CLEAR_TASK\]/
 const UPDATE_PERSONA_PARSE = /\[UPDATE_PERSONA:\s*([\s\S]+?)\]/
+// [MOOD: focused] —— 单行词（情绪枚举），不像 SET_TASK 跨行。限字母/连字符/空格，防吞正文。
+const MOOD_PARSE = /\[MOOD:\s*([A-Za-z][A-Za-z _-]*?)\]/
 
 // ── 剥离用正则（global，用于从正文中删除）────────────────────────────
 // 与原 llm.js stripProtocolMarkersForDelivery 378-382 完全一致。
@@ -29,6 +32,7 @@ const RECALL_STRIP = /\[RECALL:\s*.+?\]/g
 const SET_TASK_STRIP = /\[SET_TASK:\s*[\s\S]+?\]/g
 const CLEAR_TASK_STRIP = /\[CLEAR_TASK\]/g
 const UPDATE_PERSONA_STRIP = /\[UPDATE_PERSONA:\s*[\s\S]+?\]/g
+const MOOD_STRIP = /\[MOOD:\s*[A-Za-z][A-Za-z _-]*?\]/g
 
 const HIGH_CONFIDENCE_INTERNAL_LINE_RE = [
   /^(?:用户|user).*?(?:刚从|切到|切回|话题|意图|可能|上下文|语音输入|问)/i,
@@ -94,10 +98,10 @@ export function stripLooseThinkingPrelude(text) {
 }
 
 /**
- * 只解析、不做副作用。提取 4 种标记的捕获值。
+ * 只解析、不做副作用。提取 5 种标记的捕获值。
  * @param {string} text 模型原始输出文本
- * @returns {{ recall: string|null, setTask: string|null, clearTask: boolean, updatePersona: string|null }}
- *   recall / setTask / updatePersona：命中则为「未经 trim 的原始捕获子串」（保持与原 match[1] 一致，
+ * @returns {{ recall: string|null, setTask: string|null, clearTask: boolean, updatePersona: string|null, mood: string|null }}
+ *   recall / setTask / updatePersona / mood：命中则为「未经 trim 的原始捕获子串」（保持与原 match[1] 一致，
  *   trim 由调用方按原逻辑自行决定）；未命中为 null。
  *   clearTask：命中为 true，否则 false。
  */
@@ -106,16 +110,18 @@ export function parseMarkers(text) {
   const recallMatch = s.match(RECALL_PARSE)
   const setTaskMatch = s.match(SET_TASK_PARSE)
   const personaMatch = s.match(UPDATE_PERSONA_PARSE)
+  const moodMatch = s.match(MOOD_PARSE)
   return {
     recall: recallMatch ? recallMatch[1] : null,
     setTask: setTaskMatch ? setTaskMatch[1] : null,
     clearTask: CLEAR_TASK_PARSE.test(s),
     updatePersona: personaMatch ? personaMatch[1] : null,
+    mood: moodMatch ? moodMatch[1] : null,
   }
 }
 
 /**
- * 剥掉 <think>/<thinking> 块（可选）和全部 4 个协议标记后返回正文。
+ * 剥掉 <think>/<thinking> 块（可选）和全部 5 个协议标记后返回正文。
  * 与原 llm.js stripProtocolMarkersForDelivery 行为完全一致（含末尾 .trim()）。
  * @param {string} text
  * @param {{ stripThink?: boolean }} [opts] stripThink 默认 true
@@ -129,6 +135,7 @@ export function stripMarkers(text, { stripThink = true } = {}) {
     .replace(SET_TASK_STRIP, '')
     .replace(CLEAR_TASK_STRIP, '')
     .replace(UPDATE_PERSONA_STRIP, '')
+    .replace(MOOD_STRIP, '')
     .trim()
 }
 
@@ -171,6 +178,40 @@ export function sanitizeAssistantReplyForDelivery(text) {
   return dedupeAdjacentReplyText(stripLooseThinkingPrelude(stripMarkers(text)))
 }
 
+/**
+ * 汇合点收口：对引擎返回的原始正文「先解析协议标记、再清洗交付正文」。
+ * index.js runTurn 对所有 turn 引擎（callLLM / runPiTurn）统一调用本函数：
+ *   - response 事件正文只可能来自 sanitize 后的返回值 —— 标记泄漏
+ *     （docs/solutions/logic-errors/llm-reply-protocol-markers-leaked-into-response-event.md）
+ *     从结构上不随引擎选择回归；
+ *   - 协议副作用（RECALL/SET_TASK/CLEAR_TASK/UPDATE_PERSONA/MOOD）从 rawContent 解析，
+ *     不再依赖「引擎返回前恰好保留标记」这一约定（曾因引擎自行 sanitize 而静默失效）。
+ * @param {string} rawContent 引擎的原始输出（未经清洗）
+ * @returns {{ markers: ReturnType<parseMarkers>, response: string }}
+ */
+export function finalizeTurnReply(rawContent) {
+  const raw = String(rawContent || '')
+  return {
+    markers: parseMarkers(raw),
+    response: sanitizeAssistantReplyForDelivery(raw),
+  }
+}
+
+/**
+ * 汇合点入口（引擎返回形状）：markers 从 rawContent（未清洗原文）解析；response 从
+ * content（引擎已逐轮清洗）派生。response 绝不从 raw 派生——loose-prelude 剥离是
+ * "文本开头"语义，多轮拼接的原文整串再洗会漏掉中段旁白；content 的逐轮清洗恰好正确。
+ * 缺 rawContent 的旧形状（中止路径 / 占位返回）回退解析 content（已清洗 → 解析不出
+ * 标记，优雅降级，与历史行为一致）。
+ * @param {{ content?: string, rawContent?: string }} llmResult
+ * @returns {{ markers: ReturnType<parseMarkers>, response: string }}
+ */
+export function finalizeEngineTurnResult(llmResult) {
+  const markers = parseMarkers(String(llmResult?.rawContent ?? llmResult?.content ?? ''))
+  const response = sanitizeAssistantReplyForDelivery(llmResult?.content ?? '')
+  return { markers, response }
+}
+
 export function createAssistantReplyStreamSanitizer() {
   let buffer = ''
   let passthrough = false
@@ -183,9 +224,22 @@ export function createAssistantReplyStreamSanitizer() {
       return out
     }
 
+    // 内联 <think> 防泄漏（回归自 fork c21b7aa，Responses 形状下仍必要）：
+    // 推理以 <think>…</think> 内联在正文流时（minimax 式），块未闭合前绝不 passthrough，
+    // 否则推理文本会以 mode:text 进入 TTS。闭合后走 sanitize 剥块、只放行正文。
+    const openThink = /<think(?:ing)?>/i.test(buffer)
+    if (openThink && !/<\/think(?:ing)?>/i.test(buffer)) return ''
+
     const newlineMatch = buffer.match(/\r?\n/)
     if (!newlineMatch && !force) {
       if (startsLikeLooseInternalPrelude(buffer) && buffer.length < 800) return ''
+      if (openThink) {
+        // think 块已闭合但无换行：产出剥块后的正文，且保持非 passthrough
+        //（后续正文增量继续走缓冲检查，而不是无条件直通）。
+        const sanitized = sanitizeAssistantReplyForDelivery(buffer)
+        buffer = ''
+        return sanitized
+      }
       passthrough = true
       const out = buffer
       buffer = ''

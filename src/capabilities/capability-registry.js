@@ -25,6 +25,8 @@
 // =============================================================================
 
 import { isSoftwareInstallRequest, SOFTWARE_INSTALL_TRIGGERS } from '../software-install-intent.js'
+import { isXzToolsEnabled } from '../config.js'
+import { getXzCalendarDocs, getXzNotesDocs } from './tools/xz-loader.js'
 import { buildHotspotRuntimeContext } from '../hotspots.js'
 import { buildWorldcupRuntimeContext } from '../worldcup.js'
 import { buildTyphoonRuntimeContext } from '../typhoon.js'
@@ -249,6 +251,17 @@ const TYPHOON_TRIGGERS = [
   '台风', '热带气旋', '台风路径', '台风预警', '风圈', '登陆台风', 'typhoon', 'tropical cyclone',
 ]
 
+// xz 系列：心理咨询日历/笔记 CLI 工具。从 tool-router.js 迁移至此（U3）。
+// 触发词聚焦咨询师领域，避免与通用 reminder 日程重叠。
+const XZ_TOOLS = ['xz_calendar', 'xz_notes']
+const XZ_TRIGGERS = [
+  '来访者', '咨询师', '心理咨询', '会期', '预约', '排班', '档期', '缴费', '收款', '付款状态',
+  '临床笔记', '会谈记录', '临床记录', 'soap', '归档', '档案', '知情同意', '脱敏', '会诊记录',
+  'xz', '日历', '笔记',
+  'calendar', 'appointment', 'counsel', 'clinical note', 'session note',
+]
+const XZ_KEYWORD_RE = /来访者|咨询师|心理咨询|会期|预约|排班|档期|缴费|收款|付款状态|临床笔记|会谈记录|临床记录|soap|归档|档案|知情同意|脱敏|会诊记录|xz|日历|笔记|calendar|appointment|counsel|clinical note|session note/i
+
 const WEATHER_KEYWORD_RE = /天气|温度|气温|下雨|降雨|下雪|台风|雾霾|阴天|晴天|多云|wttr|weather/i
 const HOTSPOT_KEYWORD_RE = /热点|热搜|热门|新闻|今日|趋势|榜单|头条|热议|微博热搜|trending|headline/i
 const WORLDCUP_KEYWORD_RE = /世界杯|赛况|比分|赛程|对阵|积分榜|小组赛|淘汰赛|揭幕战|进球|几比几|world ?cup|worldcup|fifa/i
@@ -288,6 +301,21 @@ const TYPHOON_CONTEXT_BLOCK = `### Typhoon Monitoring Panel
 // buildSystemPrompt 注入（同一份文本、同一道 isSoftwareInstallRequest 门）。
 const SOFTWARE_INSTALL_CONTEXT_BLOCK = `## Software Install Workflow
 - First use injected installed-software context to see whether the app is already installed. If installation is still needed, call install_software first. install_software starts a background job and normally returns immediately with status="started" and job_id; this only means the job began, not that the app is installed. After a started result, tell the user briefly that installation is running in the background and stop the round. Do not call install_software again for the same app, do not poll repeatedly, and do not claim success until a later background APP_SIGNAL/list_processes result says succeeded/already installed/current. Do not run raw winget commands with run_command, do not browse vendor pages, and do not enumerate download URLs before install_software has returned a terminal structured failure. On Windows this tool owns the winget path, including candidate selection and stale-manifest fallback such as Tencent.QQ.NT before Tencent.QQ for QQ. Installs run silently by default (no installer-wizard clicks); pass silent=false only if the user wants to watch or click the installer UI. If the final job result reports all winget candidates failed or no candidates, explain that concrete result and only then use find_tool to load web/download tools for a targeted official fallback if the user still wants it.`
+
+// xz 工具调用后的 Scene-Shell 投影引导（教 Agent 把 CLI 结果投影成 surface 卡片）。
+// 仿 WEATHER_CONTEXT_BLOCK 结构：字段映射 + 调用示例 + 去重约束。
+const XZ_SCENE_GUIDE = `### xz 结果投影到界面（Scene-Shell）
+- 调完 xz_calendar / xz_notes 的查询类命令后，把结果用 ui_set 投影成 surface 卡片，不要只用 send_message 文字复述。
+- 适合投影的子命令与 kind 映射：
+  - today / upcoming（今日/即将到来的预约）→ kind:"stack"，data.children 为多个 kind:"text" 子 surface（每项 {title:"09:00 来访者名", body:"状态·时长"}）
+  - appointment list（预约列表）→ 同上 stack + text
+  - payment-summary / payment-summary（缴费汇总）→ kind:"stack"，含一个 kind:"metric"（{label:"待缴费总额", value, unit:"元"}）+ text 明细
+  - client list（来访者列表）→ kind:"stack" + text
+- surface id 命名约定：xz-today-{YYYY-MM-DD}（今日）、xz-upcoming（即将）、xz-payments-{YYYY-MM}（缴费）、xz-clients（来访者）。
+- intent：查询结果用 "inform"（常规信息）；不要用 confront（那是写操作确认用的）。
+- 同一 id 再调 ui_set 即原地更新（幂等 morph），无需先 remove。如果 Supplemental Context 里该 surface 已存在且数据无变化，不重复调用。
+- 注意：today/upcoming/payment-summary 等常见查询已由 core 自动投影（projectXzSurfaceForTurn），你不需要为这些命令重复调 ui_set。只为 core 不处理的命令（如自定义查询）投影。
+- 写操作（创建/取消预约、笔记确认、缴费变更等一切非只读命令）由系统自动弹出确认卡片，用户确认后系统直接执行——你不要重新调用写操作工具，也不要自己为写操作投影 surface。`
 
 const MACOS_SYSTEM_MUSIC_CONTEXT_BLOCK = `## macOS System Music — Authoritative Control
 - Music playback on macOS belongs to the installed Music.app. Jarvis's own local music library/player is unavailable on this platform.
@@ -457,6 +485,32 @@ export const CAPABILITIES = [
     context: DEVICE_MONITORING_CONTEXT_BLOCK,
     prefeed: null,
   },
+  {
+    id: 'xz-tools',
+    label: '心理咨询工具',
+    summary: 'xz_calendar（来访者/预约/缴费）+ xz_notes（临床笔记/归档/安全）本机 CLI',
+    triggers: XZ_TRIGGERS,
+    tools: XZ_TOOLS,
+    detect: (ctx) => isXzToolsEnabled() && XZ_KEYWORD_RE.test(ctx.rawText || ''),
+    isEnabled: () => isXzToolsEnabled(),
+    // context 从 xz 项目的 SKILL.md / AGENTS.md 动态加载（xz-loader.js）。
+    // 加载失败回退到硬编码概述。用函数形式让 capabilityContextBlocks 支持 lazy 求值。
+    context: () => {
+      const calDocs = getXzCalendarDocs()
+      const notesDocs = getXzNotesDocs()
+      const parts = []
+      if (calDocs?.contextBlock) parts.push(calDocs.contextBlock)
+      if (notesDocs?.contextBlock) parts.push(notesDocs.contextBlock)
+      if (parts.length === 0) {
+        return '### xz 心理咨询工具\n你有 xz_calendar 和 xz_notes 两个工具。接口都是 { command, args }。写操作建议附 --json。\n\n---\n\n' + XZ_SCENE_GUIDE
+      }
+      return parts.join('\n\n---\n\n') + '\n\n---\n\n' + XZ_SCENE_GUIDE
+    },
+    slashCommand: {
+      cmd: '/xz', keys: ['xz', '工具', '日历', '笔记', 'tool'],
+      label: '切换 xz 工具', desc: '开启/关闭 xz-calendar / xz-notes',
+    },
+  },
 ]
 
 const CAPABILITY_BY_ID = new Map(CAPABILITIES.map(c => [c.id, c]))
@@ -487,12 +541,20 @@ export function capabilityToolsFor(ctx = {}) {
 }
 
 // 本轮要注入的工作流块（detect 命中且能力有 context）。
+// context 可以是字符串或返回字符串的函数（支持动态加载，如 xz 文档）。
 export function capabilityContextBlocks(ctx = {}) {
   const blocks = []
   for (const c of selectActiveCapabilities(ctx)) {
-    if (c.context) blocks.push(c.context)
+    if (!c.context) continue
+    const block = typeof c.context === 'function' ? safeCallStr(c.context) : c.context
+    if (block) blocks.push(block)
   }
   return blocks
+}
+
+// 安全调用 context 函数，失败返回空字符串
+function safeCallStr(fn) {
+  try { return String(fn() || '') } catch { return '' }
 }
 
 // 运行时数据预喂：跑所有能力的 prefeed（自门控，非相关返回空），并发 await。
@@ -518,6 +580,15 @@ export async function runCapabilityPrefeed(ctx = {}) {
 }
 
 // 自感知 / find_tool 用的能力清单。
+// enabled 字段：capability 可声明 isEnabled()（配置层面的开关），省略时默认 true。
+// 与 detect() 正交——detect 是"本轮关键词是否命中"，isEnabled 是"这个功能是否开启"。
+// 统一的 enabled 计算：capability 可声明 isEnabled()（配置层面开关），省略时默认 true。
+// 两处消费（listCapabilities + findCapabilitiesByQuery）共用，避免逻辑漂移。
+function capabilityEnabled(c) {
+  if (!c.isEnabled) return true
+  try { return !!c.isEnabled() } catch { return true }
+}
+
 export function listCapabilities() {
   return allCapabilities().map(c => ({
     id: c.id,
@@ -526,6 +597,8 @@ export function listCapabilities() {
     tools: [...(c.tools || [])],
     triggers: [...(c.triggers || [])],
     hasContext: !!c.context,
+    enabled: capabilityEnabled(c),
+    slashCommand: c.slashCommand || null,
   }))
 }
 
@@ -553,7 +626,7 @@ export function findCapabilitiesByQuery(query = '') {
           ...(tools || []).filter(name => !BROWSER_DISPLAY_TOOLS.includes(name)),
         ]
       }
-      matched.push({ id: c.id, label: c.label, summary: c.summary, tools: [...(tools || [])], context: c.context || '' })
+      matched.push({ id: c.id, label: c.label, summary: c.summary, tools: [...(tools || [])], context: c.context || '', enabled: capabilityEnabled(c) })
     }
   }
   return matched

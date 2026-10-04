@@ -12,9 +12,19 @@ import assert from 'node:assert/strict'
 import { streamOnce, callLLM, _setClientForTest, _clearClientForTest } from './llm.js'
 import { finalizeEngineTurnResult } from './runtime/markers.js'
 
+// Responses 事件流形状的合成客户端：每个 delta → output_text.delta 事件 + completed 终态。
+// v2.2.120 起 llm.js 走 client.responses.create 事件流（chat.completions 形状已废弃）。
 function fakeClient(deltas) {
-  const chunks = deltas.map(d => ({ choices: [{ delta: d }] }))
-  return { chat: { completions: { create: async () => chunks } } }
+  let seq = 0
+  const events = [
+    ...deltas.map(d => ({ type: 'response.output_text.delta', delta: d.content ?? '', sequence_number: ++seq })),
+    {
+      type: 'response.completed',
+      sequence_number: ++seq,
+      response: { output: [], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } },
+    },
+  ]
+  return { responses: { create: async () => events } }
 }
 
 const RAW = [

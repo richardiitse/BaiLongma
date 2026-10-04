@@ -121,6 +121,11 @@ export const MINIMAX_MODELS = [
     label: 'MiniMax-M1',
     deprecated: false,
   },
+  {
+    id: 'MiniMax-M3',
+    label: 'MiniMax-M3',
+    deprecated: false,
+  },
 ]
 
 export const OPENAI_MODELS = [
@@ -615,10 +620,8 @@ function readLlmProviderConfig(provider) {
 function writeLlmProviderConfig(provider, record) {
   const file = getLlmConfigFile(provider)
   if (!file) throw new Error(`Unsupported provider: "${provider}"`)
-  const tmp = `${file}.tmp`
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(tmp, JSON.stringify(record, null, 2), 'utf-8')
-  fs.renameSync(tmp, file)
+  // 与 config.json / voice 凭据同走统一原子写入器（0600 + tmp+rename）——这里存的是明文 apiKey。
+  writeJsonObjectFile(file, record)
 }
 
 function resolveLlmRecord(raw, fallbackProvider) {
@@ -671,9 +674,9 @@ function resolveStoredLlm(parsed) {
 }
 
 function writeStoredConfig(obj) {
-  const tmp = paths.configFile + '.tmp'
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf-8')
-  fs.renameSync(tmp, paths.configFile)
+  // config.json 含明文 API key，与 voice/llm 凭据 JSON 同走统一原子写入器（0600 + tmp+rename）。
+  // USER_DIR 已在 paths.js import 时 ensureDir 创建，writeJsonObjectFile 的 mkdir 对 configFile 是 no-op。
+  writeJsonObjectFile(paths.configFile, obj)
 }
 
 // 读出 config.json 现有内容（失败返回空对象）。
@@ -784,6 +787,32 @@ function getVoiceProviderConfigFile(provider) {
   return path.join(paths.voiceConfigDir, `${p}.json`)
 }
 
+// 密钥落盘卫生：config.json、voice provider 配置、llm/<provider>.json、seedance.json 都含
+// 明文 API key，历史上以默认 0644 写入过。启动时统一收紧到 0600（best-effort：失败只警告，
+// 不阻断启动）。llm/ 目录用 readdir 枚举而非白名单——与写入器产出的事实集合对齐，
+// 未来新增 provider 文件自动被覆盖，清单与写入器不会漂移。
+function hardenSecretFilePermissions() {
+  const files = [
+    paths.configFile,
+    getVoiceActiveFile(),
+    ...[...VOICE_PROVIDERS].map((p) => getVoiceProviderConfigFile(p)),
+    paths.seedanceConfigFile,
+  ]
+  try {
+    for (const name of fs.readdirSync(paths.llmConfigDir)) {
+      if (name.endsWith('.json')) files.push(path.join(paths.llmConfigDir, name))
+    }
+  } catch { /* 目录不存在（未配置过 provider）则跳过 */ }
+  for (const file of files) {
+    if (!file) continue
+    try {
+      if (fs.existsSync(file)) fs.chmodSync(file, 0o600)
+    } catch (e) {
+      console.warn(`[config] 收紧 ${path.basename(file)} 权限失败: ${e.message}`)
+    }
+  }
+}
+
 function readJsonObjectFile(file) {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'))
@@ -796,7 +825,10 @@ function readJsonObjectFile(file) {
 function writeJsonObjectFile(file, record) {
   const tmp = `${file}.tmp`
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(tmp, JSON.stringify(record, null, 2), 'utf-8')
+  // 凭据 JSON 统一 0600。显式 chmod 兜底：writeFileSync 的 mode 仅在文件创建时生效，
+  // 崩溃残留的旧 0644 .tmp 会被复用并把宽松权限带过 rename（secret-store.js 同款防御）。
+  fs.writeFileSync(tmp, JSON.stringify(record, null, 2), { encoding: 'utf-8', mode: 0o600 })
+  try { fs.chmodSync(tmp, 0o600) } catch { /* 尽力而为 */ }
   fs.renameSync(tmp, file)
 }
 
@@ -1026,10 +1058,16 @@ export const config = {
   baseURL: null,
   needsActivation: true,
   temperature: 0.5,
+  // 内层 turn-engine：'llm' = 现状自研（src/llm.js callLLM）；'pi' = Pi SDK（src/pi/turn-engine.js）。
+  // 切换实验性，默认 'llm' 零回归。
+  turnEngine: 'llm',
   // Responses reasoning 强度开关：true=high，false=provider 支持的最低强度
   // （DeepSeek 为 low，OpenAI 为 none）。默认低强度——只有用户显式开启才使用 high。
   // 不是 runtime 按难度替模型决定开关 reasoning（那条路 index.js 已注释外掉）。
   thinking: false,
+  // xz 脱敏模式：开启后 surface 中来访者姓名显示为代号（C-001），保护隐私。
+  // Agent 上下文始终用真名（工具结果不脱敏），只 surface 投影脱敏。默认关闭。
+  xzRedactMode: false,
   contextWindow: {
     chatMessageLimit: DEFAULT_CONTEXT_MESSAGE_LIMIT,
     toolCallLimit: DEFAULT_CONTEXT_TOOL_LIMIT,
@@ -1046,10 +1084,17 @@ export const config = {
     accessToken: '',
     updatedAt: null,
   },
+  // xz 系列工具（本机 xz-calendar / xz-notes CLI）总开关。默认关——需用户在
+  // 「设置→高级功能」显式启用后，agent 才看得到并调用得动这两个工具（注入+执行双层门）。
+  xzTools: {
+    enabled: false,
+    updatedAt: null,
+  },
 }
 
 // 迁移必须在下面读取/加载 config.json 之前跑完，确保后续逻辑看到的是已升级的结构。
 runConfigMigrations()
+hardenSecretFilePermissions()
 
 // 加载顺序刻意分块容错：先无条件吃下 temperature / security 等"兄弟字段"，
 // 再单独判断 LLM 块能否激活。这样即便 LLM 块因 provider 改名/缺字段而不可用，
@@ -1062,6 +1107,9 @@ if (parsedConfig) {
   // 缺字段（旧版升级 / 未开启过）按默认 false 处理 —— 无需 schema 迁移。
   if (typeof parsedConfig.thinking === 'boolean') {
     config.thinking = parsedConfig.thinking
+  }
+  if (typeof parsedConfig.xzRedactMode === 'boolean') {
+    config.xzRedactMode = parsedConfig.xzRedactMode
   }
   if (parsedConfig.contextWindow && typeof parsedConfig.contextWindow === 'object') {
     const chatMessageLimit = Number(parsedConfig.contextWindow.chatMessageLimit)
@@ -1099,6 +1147,15 @@ if (parsedConfig) {
     if (typeof n.allowLanAccess === 'boolean') config.network.allowLanAccess = n.allowLanAccess
     if (typeof n.accessToken === 'string') config.network.accessToken = n.accessToken.trim()
     if (typeof n.updatedAt === 'string') config.network.updatedAt = n.updatedAt
+  }
+  // turn-engine 选择（'llm' | 'pi'），白名单外一律保持默认 'llm'。
+  if (parsedConfig.turnEngine === 'llm' || parsedConfig.turnEngine === 'pi') {
+    config.turnEngine = parsedConfig.turnEngine
+  }
+  if (parsedConfig.xzTools && typeof parsedConfig.xzTools === 'object') {
+    const x = parsedConfig.xzTools
+    if (typeof x.enabled === 'boolean') config.xzTools.enabled = x.enabled
+    if (typeof x.updatedAt === 'string') config.xzTools.updatedAt = x.updatedAt
   }
 }
 
@@ -1270,6 +1327,12 @@ export async function activate({ provider = AUTO_PROVIDER, apiKey, model, baseUR
   return commitPreparedActivation(prepared)
 }
 
+// 内层 turn-engine 选择：'llm'（自研 src/llm.js）或 'pi'（Pi SDK src/pi/turn-engine.js）。
+// 默认 'llm'。runTurn 据此分流到 callLLM / runPiTurn（见 src/index.js）。
+export function getTurnEngine() {
+  return config.turnEngine === 'pi' ? 'pi' : 'llm'
+}
+
 export function getActivationStatus() {
   const pConfig = config.provider && config.provider !== 'custom' ? PROVIDER_CONFIG[config.provider] : null
   const customModels = config.model ? [{ id: config.model, label: config.model, deprecated: false }] : DEEPSEEK_MODELS
@@ -1439,6 +1502,13 @@ export function setThinking(enabled) {
   return { thinking: v }
 }
 
+export function setXzRedactMode(enabled) {
+  const v = !!enabled
+  config.xzRedactMode = v
+  patchConfig({ xzRedactMode: v })
+  return { xzRedactMode: v }
+}
+
 export function getContextWindowConfig() {
   return {
     chatMessageLimit: config.contextWindow.chatMessageLimit,
@@ -1540,6 +1610,28 @@ export function setSecurity(updates) {
   return getSecurity()
 }
 
+// xz 系列工具（xz-calendar / xz-notes CLI）总开关。与 security/network 同款走 config.json 块。
+// isXzToolsEnabled 是注入层（tool-router）与执行层（executor）共用的快查函数。
+export function getXzToolsConfig() {
+  return {
+    enabled: !!config.xzTools.enabled,
+    updatedAt: config.xzTools.updatedAt || null,
+  }
+}
+
+export function setXzToolsConfig(updates) {
+  const before = config.xzTools.enabled
+  if (typeof updates.enabled === 'boolean') config.xzTools.enabled = updates.enabled
+  const changed = before !== config.xzTools.enabled
+  if (changed) config.xzTools.updatedAt = nowTimestamp()
+  patchConfig({ xzTools: { ...config.xzTools } })
+  return getXzToolsConfig()
+}
+
+export function isXzToolsEnabled() {
+  return !!config.xzTools.enabled
+}
+
 export function getLanAccessToken({ ensure = false } = {}) {
   const envToken = String(globalThis.process?.env?.JARVIS_API_TOKEN || '').trim()
   if (envToken) return envToken
@@ -1624,9 +1716,8 @@ function readSeedanceFile() {
   catch { return {} }
 }
 function writeSeedanceFile(obj) {
-  const tmp = paths.seedanceConfigFile + '.tmp'
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf-8')
-  fs.renameSync(tmp, paths.seedanceConfigFile)
+  // seedance.json 存 Ark apiKey，与其它凭据同标准：统一原子写入器（0600）。
+  writeJsonObjectFile(paths.seedanceConfigFile, obj)
 }
 
 // 一次性迁移：旧版把 seedance 存在 config.json 里。若独立文件尚无、而 config.json 里还有，
@@ -1774,6 +1865,20 @@ export function getVoiceConfig() {
 
 export function getVoiceRuntimeConfig(providerHint = null) {
   const provider = readActiveVoiceProvider(providerHint || 'aliyun')
+  const stored = readVoiceProviderConfig(provider)
+  return {
+    ...stored,
+    voiceProvider: provider,
+    provider,
+  }
+}
+
+// 按"客户端显式指定的 provider"读对应凭据文件（voice/<provider>.json），与 getVoiceRuntimeConfig 的区别：
+// getVoiceRuntimeConfig 把 hint 当 fallback——active.json 存在时就忽略 hint，返回 active 的 provider 凭据。
+// 本函数让 hint 成为权威：用户在 UI 临时切到"本机识别(local)"时不会被 active.json(可能=aliyun)强制覆盖。
+// 对 local（纯本地、无凭据）返回空记录，createCloudASRSession 的 local 分支不读凭据，靠 provider 字段分流。
+export function getVoiceProviderConfigRecord(providerHint) {
+  const provider = normalizeVoiceProvider(providerHint, 'aliyun')
   const stored = readVoiceProviderConfig(provider)
   return {
     ...stored,

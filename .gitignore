@@ -98,6 +98,9 @@ web_modules/
 .env.production.local
 .env.local
 
+# 本地配置（含密钥，勿提交）。模板见 config.example.json。
+config.json
+
 # Local LLM provider credentials. Commit redacted examples only.
 llm/*.json
 !llm/*.example.json

@@ -15,6 +15,7 @@ import { createVoiceCore } from './voice-core.js';
 import { createContinuousPolicy } from './voice-continuous.js';
 import { createPttController } from './voice-ptt.js';
 import { createWakeFlow } from './voice-wake.js';
+import { initMoodAmbient } from './mood-ambient.js';
 import { getApiToken } from './api-client.js';
 
 export function initVoicePanel({
@@ -81,6 +82,13 @@ export function initVoicePanel({
 
   // 唤醒会话编排（命中「小白龙」→ 悬浮球入场 → 10s 无话退场）。非 Electron 环境内部自动失能。
   const wake = createWakeFlow(core);
+
+  // 氛围底色层：算好后注入 core（主窗口球）+ 经 IPC 推给悬浮球窗，两窗氛围同步。
+  // orbMood 通道由 preload 暴露（window.jarvis.wake.orbMood）；非 Electron 环境无此通道，传 null 失能。
+  initMoodAmbient({
+    core,
+    orbMood: (mood) => { try { window.jarvis?.wake?.orbMood?.(mood); } catch {} },
+  });
 
   // 安装模式策略钩子：continuous = 会话默认策略；PTT 通过 core.pttHolding 在其上叠加。
   // 每帧：先喂唤醒编排（把状态+真实音量+文字推给悬浮球窗），再走 continuous 打断检测。

@@ -15,9 +15,35 @@ if (IS_WIN) {
   } catch (_) {}
 }
 
-const { app, BaseWindow, BrowserWindow, WebContentsView, View, webContents, session, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard, systemPreferences } = require('electron')
+// require 内置模块到最前面：下面的 .env 加载块需要 path/fs，
+// 它们必须在被使用之前 require（CommonJS 模块作用域中没有全局 path/fs）。
 const path = require('path')
 const fs = require('fs')
+
+// 加载项目根 .env 到 process.env（Electron 不支持 --env-file flag，必须手动加载）。
+// 只在 KEY 不存在时设置（不覆盖已有的环境变量）。开发模式下读仓库根 .env。
+try {
+  const envPath = path.join(__dirname, '..', '.env')
+  const envText = fs.readFileSync(envPath, 'utf-8')
+  for (const line of envText.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const eq = trimmed.indexOf('=')
+    if (eq < 1) continue
+    const key = trimmed.slice(0, eq).trim()
+    let val = trimmed.slice(eq + 1).trim()
+    // 剥离值两端匹配的单/双引号（支持 KEY="value" 和 KEY='value' 写法）
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1)
+    }
+    if (!(key in process.env)) process.env[key] = val
+  }
+} catch (e) {
+  // 只静默 .env 不存在（ENOENT）的情况；其他错误（权限、语法等）应暴露，避免被伪装成"无 .env"
+  if (e.code !== 'ENOENT') console.error('[main] .env 加载失败:', e.message)
+}
+
+const { app, BaseWindow, BrowserWindow, WebContentsView, View, webContents, session, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard, systemPreferences } = require('electron')
 const net = require('net')
 const http = require('http')
 const https = require('https')
@@ -1536,6 +1562,9 @@ ipcMain.on('wake:orb-enter', () => {
 })
 
 ipcMain.on('wake:orb-frame', (_e, payload) => { sendToOrb('orb:frame', payload) })
+
+// 氛围调制:主窗口 mood-ambient 推给球窗(独立于唤醒会话;球窗可见即下发)
+ipcMain.on('wake:orb-mood', (_e, payload) => { sendToOrb('orb:mood', payload) })
 
 ipcMain.on('wake:orb-text', (_e, payload) => { sendToOrb('orb:text', payload) })
 

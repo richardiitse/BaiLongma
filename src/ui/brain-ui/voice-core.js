@@ -14,7 +14,7 @@
 //
 // 点云算法移植自 ACUI (Remix)/Voice Component.html
 
-import { apiWebSocketProtocols, apiWebSocketUrl } from './api-client.js';
+import { apiWebSocketProtocols, apiWebSocketUrl, apiUrl } from './api-client.js';
 
 // ─── 球面采样（Fibonacci） ───
 function fibSphere(n, radius) {
@@ -62,6 +62,8 @@ function sn(x, y, z, t) {
 
 function lerp(a, b, t) { return a + (b - a) * t; }
 function lerpArr(a, b, t) { return a.map((v, i) => lerp(v, b[i], t)); }
+// 色温调制用的 RGB 钳位（mood-ambient 的 warmth 偏移后保证落在 0-255）
+function clamp255(v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
 
 // ─── 状态配置 ───
 // idle = 麦克风关闭（灰色）  listening = 麦克风开启待命（白色）
@@ -85,6 +87,27 @@ export const BARGEIN_THRESHOLD = 0.09; // 振幅阈值（高于环境噪声和 A
 const CLOUD_WS_URL = () => apiWebSocketUrl('/voice/cloud');
 const VOICE_PROVIDER_KEY = 'jarvis-voice-provider';
 const VOICE_MIC_DEVICE_KEY = 'jarvis-voice-mic-device-id';
+
+// 连 WS 前从后端 /settings/voice 读权威 provider 并同步到 localStorage。
+// loadVoiceSettings() 只在打开设置面板时跑，应用启动/唤醒触发时不会同步——
+// 若后端 active.json 已切到 volcengine 而 localStorage 残留 'aliyun'，
+// 前端会发错的 provider，后端读不存在的凭据文件 → ASR 静默失败。
+// 这里在每次连 WS 前做一次权威读取，覆盖主连接和 barge-in 重连两条路径。
+// fetch 失败时 fallback 到 localStorage 旧值（不比现状更差）。
+async function fetchActiveVoiceProvider() {
+  try {
+    const resp = await fetch(apiUrl('/settings/voice'));
+    const data = await resp.json();
+    const provider = data?.voice?.voiceProvider;
+    if (provider) {
+      localStorage.setItem(VOICE_PROVIDER_KEY, provider);
+      return provider;
+    }
+  } catch (e) {
+    console.warn('[voice] 同步 provider 失败，沿用 localStorage:', e?.message || e);
+  }
+  return localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun';
+}
 
 // 采集分块大小（样本数）：AudioWorklet 累积到该样本数再投递；ScriptProcessor 回退也用它。
 // 2048 @ 16kHz = 128ms/块，权衡延迟与消息/网络开销。
@@ -179,6 +202,12 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   // 主窗口自己渲染时不用它（保持 null），行为不变。
   let externalVol = null;       // null = 未注入；数值 = 用它当本帧的视觉音量
 
+  // ── 氛围调制层（mood-ambient.js 注入）──
+  // 不新增颜色档/状态，而是对 STATE_CFG 的 lerp 目标（amp/spd/col）做小幅度调制：
+  // 色温偏移、节奏微调、呼吸幅度。用户「能感受到但说不清」，守住 "keep the warmth lower"。
+  // null = 未注入（行为与改造前完全一致），由 mood-ambient.js 在主窗口算好经 IPC 推给球窗。
+  let ambientMood = null;       // { warmth:-1..1, energy:0..1, breathe:0.5..1.5 }
+
   // 画面节流档位：返回 0 = 不限（跟随显示器刷新率）
   function targetDrawFps(ts) {
     let fps = 0;
@@ -215,6 +244,8 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   }
   // 注入外部音量（悬浮球窗口用）；传 null 取消注入，回到自带麦克风/TTS 音量逻辑。
   function setExternalVol(v) { externalVol = (v == null ? null : Number(v) || 0); }
+  // 注入氛围调制（mood-ambient.js 用）；传 null 取消注入，渲染回到纯 STATE_CFG 目标。
+  function setAmbientMood(m) { ambientMood = m == null ? null : m; }
 
   function triggerDone() {
     setStatus('done');
@@ -317,6 +348,20 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       lerpArr(s.col[1], cfg.g, ls * 1.5),
       lerpArr(s.col[2], cfg.b, ls * 1.5),
     ];
+
+    // ── 氛围调制：叠加在 STATE_CFG lerp 目标之上，幅度小（克制原则）──
+    //    warmth → 色温（暖+红-蓝 / 冷-红+蓝），energy → 转速，breathe → 待机微动幅度。
+    //    不注入（ambientMood===null）时整段跳过，行为与改造前完全一致。
+    if (ambientMood) {
+      const w = ambientMood.warmth || 0;            // -1..1
+      const k = 8;                                  // 色温 RGB 偏移幅度（克制）
+      s.col[0] = [clamp255(s.col[0][0] + w * k), clamp255(s.col[0][1] + w * k), clamp255(s.col[0][2] + w * k)];
+      s.col[2] = [clamp255(s.col[2][0] - w * k), clamp255(s.col[2][1] - w * k), clamp255(s.col[2][2] - w * k)];
+      const e = ambientMood.energy != null ? ambientMood.energy : 0.3;
+      s.spd *= (0.85 + e * 0.30);                   // 节奏 ±15%
+      const br = ambientMood.breathe != null ? ambientMood.breathe : 1.0;
+      s.amp = lerp(s.amp, s.amp * br, 0.02);        // 微动缓变，避免突跳
+    }
 
     // 有声时放大振幅/转速（音量来自上方分析段，可能比本绘制帧新）。
     // externalVol 已注入（悬浮球窗口）则优先用它——主窗口推来的真实音量。
@@ -686,9 +731,9 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
     ws.binaryType = 'arraybuffer';
     cloudWs = ws;
 
-    ws.onopen = () => {
+    ws.onopen = async () => {
       if (cloudWs !== ws) return;
-      const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun';
+      const provider = await fetchActiveVoiceProvider();
       const lang = getLang?.()?.split('-')[0] || 'zh';
       ws.send(JSON.stringify({ type: 'config', provider, lang }));
       setStatus('listening');
@@ -705,7 +750,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
 
     ws.onmessage = (ev) => {
       if (cloudWs !== ws) return;
-      try { handleAsrMessage(JSON.parse(ev.data)); } catch {}
+      try { handleAsrMessage(JSON.parse(ev.data)); } catch (e) { console.warn('[voice] ASR 消息处理失败:', e?.message || e, ev.data); }
     };
 
     ws.onerror = () => { if (cloudWs === ws) setStatus('error'); };
@@ -927,9 +972,9 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       const bargeinWs = new WebSocket(CLOUD_WS_URL(), apiWebSocketProtocols());
       bargeinWs.binaryType = 'arraybuffer';
       cloudWs = bargeinWs;
-      bargeinWs.onopen = () => {
+      bargeinWs.onopen = async () => {
         if (cloudWs !== bargeinWs) return;
-        const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun';
+        const provider = await fetchActiveVoiceProvider();
         const lang = getLang?.()?.split('-')[0] || 'zh';
         bargeinWs.send(JSON.stringify({ type: 'config', provider, lang }));
         lastInboundTs = Date.now(); // 看门狗：打断重连后给新鲜起点
@@ -940,7 +985,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       };
       bargeinWs.onmessage = (ev) => {
         if (cloudWs !== bargeinWs) return;
-        try { handleAsrMessage(JSON.parse(ev.data)); } catch {}
+        try { handleAsrMessage(JSON.parse(ev.data)); } catch (e) { console.warn('[voice] ASR 消息处理失败(barge-in):', e?.message || e, ev.data); }
       };
       bargeinWs.onerror = () => { if (cloudWs === bargeinWs) setStatus('error'); };
       bargeinWs.onclose = () => {
@@ -980,6 +1025,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
     startRenderLoop,
     stopRenderLoop,
     setExternalVol,
+    setAmbientMood,
     // 会话生命周期
     startSession,
     stopSession,

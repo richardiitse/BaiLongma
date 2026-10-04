@@ -1,7 +1,7 @@
 // 升级容错：旧 config.json 的 LLM 块不可用时，不能连带把 security / temperature 等
 // 兄弟字段一起重置（升级后最常见的"配置全没了"根因）。
 //
-// 隔离策略：把 BAILONGMA_USER_DIR 指向临时目录，paths.configFile 随之落在临时目录里。
+// 隔离策略：把 JARVIS_USER_DIR 指向临时目录，paths.configFile 随之落在临时目录里。
 // 每个场景重写同一个 config.json，再用带版本号的 URL 重新 import config.js（绕过模块缓存，
 // 让顶层加载逻辑对新文件重跑一遍；paths.js 已缓存，configFile 路径保持不变）。
 //
@@ -12,7 +12,7 @@ import os from 'os'
 import path from 'path'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'blm-config-'))
-process.env.BAILONGMA_USER_DIR = tmp
+process.env.JARVIS_USER_DIR = tmp
 
 // 清掉可能存在的 LLM 环境变量，否则 LLM 块不可用时会走 env 兜底而误判为已激活
 for (const k of [
@@ -316,6 +316,33 @@ async function loadFresh(json) {
   assert(deepseekCfg.apiKey === 'sk-deepseek-valid-key-1234567890', 'I: 旧 provider key 未被覆盖')
   const switched = mod.switchProviderConfig({ provider: 'deepseek', model: 'deepseek-v4-flash' })
   assert(switched.provider === 'deepseek' && mod.config.apiKey === 'sk-deepseek-valid-key-1234567890', 'I: 无需重新输入 key 即可切回旧 provider')
+}
+
+// ── 场景 J：凭据文件权限 0600 —— 统一写入器产出 + 启动加固收紧（POSIX-only）──
+// 二轮评审 #1/#7：llm/<provider>.json 与 seedance.json 曾以 0644 写入且不在启动加固清单。
+if (process.platform !== 'win32') {
+  const mode = (f) => fs.statSync(f).mode & 0o777
+  // 预置宽松权限：config.json 回 0644（loadFresh 重写时无 mode），seedance.json 手工种 0644
+  const seedanceFile = path.join(tmp, 'seedance.json')
+  fs.writeFileSync(seedanceFile, JSON.stringify({ apiKey: 'sk-seedance-placeholder' }, null, 2))
+  fs.chmodSync(seedanceFile, 0o644)
+  fs.chmodSync(configFile, 0o644)
+
+  const { config: cfgJ } = await loadFresh({
+    provider: 'deepseek',
+    apiKey: 'sk-deepseek-valid-key-1234567890',
+    model: 'deepseek-v4-pro',
+    voice: { voiceProvider: 'aliyun', aliyunApiKey: 'sk-aliyunkeyplaceholder1234567890' },
+  })
+  assert(cfgJ.needsActivation === false, 'J: provider 正常激活')
+  assert(mode(configFile) === 0o600, 'J: config.json 收紧到 0600')
+  assert(mode(seedanceFile) === 0o600, 'J: seedance.json 被启动加固清单覆盖并收紧到 0600')
+  const llmFile = path.join(llmDir, 'deepseek.json')
+  assert(fs.existsSync(llmFile), 'J: 迁移产出 llm/deepseek.json')
+  assert(mode(llmFile) === 0o600, 'J: llm/<provider>.json 经统一写入器产出为 0600')
+  const voiceFile = path.join(voiceDir, 'aliyun.json')
+  assert(fs.existsSync(voiceFile), 'J: 迁移产出 voice/aliyun.json')
+  assert(mode(voiceFile) === 0o600, 'J: voice/<provider>.json 为 0600')
 }
 
 try { fs.rmSync(tmp, { recursive: true, force: true }) } catch {}

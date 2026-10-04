@@ -1,6 +1,7 @@
 import { createMarkdownBody } from "./markdown.js";
 import { getUiClientId } from "./api-client.js";
 import { formatDateTime, t } from "./i18n/index.js";
+import { isAlertEnabled } from "./alert-sound-pref.js";
 
 // 把数据库/事件里的细粒度 channel 名转成 UI 友好的简化标签
 export function friendlyChannelLabel(channel) {
@@ -312,10 +313,8 @@ export function initChat({
   }
 
   async function playJarvisAlert() {
-    // 消息提示音已取消：很多用户在深夜处理工作，不希望任何声音打扰（含文本回复与语音识别后的回复）。
-    // 这里直接返回，让两个调用点（普通消息 / 流式直播气泡）静默。TTS 朗读不受影响。
-    return;
-    // eslint-disable-next-line no-unreachable
+    // 回复提示音开关（默认开）：用户可在设置里关闭。深夜工作可静音，TTS 朗读不受影响。
+    if (!isAlertEnabled()) return;
     const ctx = ensureAudioContext();
     if (!ctx) return;
     try { if (ctx.state === "suspended") await ctx.resume(); } catch { return; }
@@ -1070,7 +1069,7 @@ export function initChat({
   // 输入框以 "/" 开头时弹出命令菜单。ASR/TTS/LLM 直接打开对应设置面板；
   // 视频生成无独立面板，预填一句配置请求由 Agent 引导。
   const slashMenu = document.getElementById("slash-menu");
-  const SLASH_COMMANDS = [
+  let SLASH_COMMANDS = [
     {
       cmd: "/llm", keys: ["llm", "模型", "model"],
       label: t("slash.llmLabel"), desc: t("slash.llmDescription"),
@@ -1097,6 +1096,18 @@ export function initChat({
       run: showSlashHelp,
     },
   ];
+
+  // 斜杠命令注册表：允许 capability-registry 声明的命令动态注册。
+  // run 回调在浏览器端定义（不能引用服务端模块），根据 cmd 模式匹配设置。
+  const SLASH_RUN_BY_CMD = {
+    "/xz": () => openSettings?.("advanced"),
+  };
+  function registerSlashCommand(entry) {
+    if (!entry || !entry.cmd) return;
+    // 避免重复注册
+    if (SLASH_COMMANDS.some(c => c.cmd === entry.cmd)) return;
+    SLASH_COMMANDS.push({ ...entry, run: SLASH_RUN_BY_CMD[entry.cmd] || (() => {}) });
+  }
 
   let slashItems = [];    // 当前过滤后的命令
   let slashActive = -1;   // 当前高亮索引
@@ -1328,6 +1339,7 @@ export function initChat({
     isComposerLocked: () => inputLocked,
     isTyping,
     openChat,
+    registerSlashCommand,
     restoreChatHistory,
     reconcileSentMessage,
     reconcileResourceMessage,

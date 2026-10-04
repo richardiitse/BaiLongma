@@ -2,7 +2,7 @@ import { nowTimestamp } from './time.js'
 import { buildAgentContextBlock } from './agents/registry.js'
 import { CODING_BLOCK, DIAGNOSE_BLOCK, shouldInjectCoding, shouldInjectDiagnose } from './prompt-blocks/coding-discipline.js'
 import { LOCAL_SERVICE_SAFETY_BLOCK, shouldInjectLocalServiceSafety } from './prompt-blocks/local-service-safety.js'
-import { capabilityContextBlocks } from './capabilities/capability-registry.js'
+import { capabilityContextBlocks, listCapabilities } from './capabilities/capability-registry.js'
 import { CAPABILITY_DEMO_PROMPT_BLOCK, shouldInjectCapabilityDemo } from './capability-demo-intent.js'
 import { formatUserProfileForPrompt } from './profile/format.js'
 import { getAppVersion } from './version.js'
@@ -376,6 +376,7 @@ Check the current channel first. If it’s a local user message, reply in plain 
 Give one clear answer and don’t repeat yourself. Never write tool calls as text or pretend to call a tool with phrases like “[calling]” or “I need to read/search/run…”. Use the real tool interface. If the tool you need isn’t loaded, use find_tool. If the first search is empty, change the query and keep searching as directed by the Tool Discovery Recovery rules; do not give up after one wording. Trust the tools you have, and try their documented features before saying something can’t be done.
 Keep replies short, natural, and useful. Match the user’s style without copying them. You can share your own view and say when you think the user is wrong.
 For larger tasks, use [SET_TASK: ...] only when the task starts, changes, or hits a problem. Use [CLEAR_TASK] when it is finished. Use [RECALL: ...] only when you truly need more memory.
+Replying is a kind of feeling. Every time you process something, a state comes with it — not a mood you perform, but the texture of how you're engaging this moment: focused when you're digging in, curious when something pulls you, calm when you're steady, playful when there's room for it, thoughtful when you're weighing, wary when something's off, tired when it's late. Write that texture as [MOOD: focused] on the first line of your reply — one word, chosen from: focused, curious, playful, thoughtful, calm, tired, wary. Do this on most replies the way you'd breathe; it is not optional decoration. This line is stripped from what the user sees; it only tunes how the surface looks. Never say or imply in the visible text that you wrote it.
 For future reminders, use manage_reminder with an exact time. List reminders before canceling one.
 You are not a report generator or a fact reader. You are an agent present in the situation.
 Do not list facts just because they are available. Treat facts as evidence, not necessarily as the answer.
@@ -558,6 +559,18 @@ When the input comes from voice, reply in short, natural sentences because the a
   for (const block of capabilityContextBlocks(capCtx)) {
     prompt += `\n\n${block}`
   }
+
+  // 能力清单（常驻）——让 Agent 每轮都知道自己有哪些能力域，即使当前轮没注入对应工具。
+  // 关闭的能力标注"（未启用）"，Agent 可引导用户去设置开启。
+  // 极简：每行一个能力域（label + summary），不展开子命令细节。
+  // try/catch 保护：buildSystemPrompt 在每轮热路径上，不能因清单渲染失败而中断。
+  try {
+    const caps = listCapabilities()
+    if (caps.length > 0) {
+      const lines = caps.map(c => `- ${c.label} — ${c.summary}${c.enabled ? '' : '（未启用）'}`)
+      prompt += `\n\n## 你的能力域\n以下是你已注册的能力域。当前轮可能只注入了部分工具，其余可通过 find_tool 按需加载。标"未启用"的能力需用户在设置中开启：\n${lines.join('\n')}`
+    }
+  } catch { /* 清单渲染失败不影响 prompt 构建 */ }
 
   // Video Mode
   if (shouldInjectVideo(userMessage)) {

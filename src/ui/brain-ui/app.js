@@ -5,6 +5,8 @@ import { initChat, friendlyChannelLabel } from "./chat.js";
 import { initPanelCollapse } from "./panel-collapse.js";
 import { ThoughtStream } from "./thought-stream.js";
 import { initVoicePanel } from "./voice-panel.js";
+import { moodAmbientOnAgentEvent, moodAmbientSetAgentMood } from "./mood-ambient.js";
+import { isAlertEnabled, setAlertEnabled } from "./alert-sound-pref.js";
 import { initHotspot, toggleHotspot, setHotspotMode } from "./hotspot.js";
 import { initWorldcup, toggleWorldcup, setWorldcupMode } from "./worldcup.js";
 import { initTyphoon, toggleTyphoon, setTyphoonMode } from "./typhoon.js";
@@ -2478,6 +2480,9 @@ function extractNids(memList) {
 }
 
 function handle({ type, data = {}, ts = null }) {
+  // 氛围底色层：把 SSE 事件喂给 mood-ambient（派生忙碌度/活跃度，调制点云球色温与节奏）。
+  // 只读消费，不影响任何现有 case 行为。
+  try { moodAmbientOnAgentEvent(type, data); } catch {}
   switch (type) {
     case "heartbeat_settings_updated":
       applyHeartbeatConfig(data);
@@ -2870,6 +2875,11 @@ function handle({ type, data = {}, ts = null }) {
       break;
     case "agent_name_updated":
       setAgentName(data.name);
+      break;
+    case "agent_mood":
+      // 阶段 2：小白龙本轮用 [MOOD: x] 自表达的情绪 → 叠加调制点云球（在氛围底色之上）。
+      // 用户不可见，只调球的色温/节奏/呼吸。
+      moodAmbientSetAgentMood(data?.mood);
       break;
     case "media_mode":
       window.dispatchEvent(new CustomEvent("jarvis:media", { detail: data }));
@@ -3520,9 +3530,10 @@ async function playTTSReply(text, { playbackKey = "", reason = "whole-reply" } =
 }
 
 // ── 流式回复文本工具 ───────────────────────────────────────────────────────────
-// 协议标记（[RECALL:…]/[SET_TASK:…]/[CLEAR_TASK]/[UPDATE_PERSONA:…]）剥离。与后端 markers.js 等价；
+// 协议标记（[RECALL:…]/[SET_TASK:…]/[CLEAR_TASK]/[UPDATE_PERSONA:…]/[MOOD:…]）剥离。
+// 与后端 markers.js 的五种标记等价（MOOD 限单行词表，镜像 MOOD_STRIP，防吞正文）；
 // 流式场景额外把"末尾尚未闭合的标记起始"整段藏起，避免半截标记被显示或念出来（等 ] 到了再放出）。
-const MARKER_STRIP_RE = /\[(?:RECALL:[\s\S]*?|SET_TASK:[\s\S]*?|CLEAR_TASK|UPDATE_PERSONA:[\s\S]*?)\]/g;
+const MARKER_STRIP_RE = /\[(?:RECALL:[\s\S]*?|SET_TASK:[\s\S]*?|CLEAR_TASK|UPDATE_PERSONA:[\s\S]*?|MOOD:[A-Za-z][A-Za-z _-]*?)\]/g;
 function cleanStreamText(raw) {
   let s = String(raw || '').replace(MARKER_STRIP_RE, '');
   const lastOpen = s.lastIndexOf('[');
@@ -3833,6 +3844,20 @@ chat = initChat({
   },
 });
 chat.applyActivationWarmupLock();
+
+// 注册 capability-registry 声明的斜杠命令（如 /xz）。
+// 浏览器端不能 import 服务端模块，通过 API 端点获取命令元数据。
+(async () => {
+  try {
+    const res = await fetch(`${API}/settings/slash-commands`);
+    const data = await res.json();
+    if (data.ok && Array.isArray(data.commands)) {
+      for (const cmd of data.commands) {
+        chat?.registerSlashCommand?.(cmd);
+      }
+    }
+  } catch {}
+})();
 if (MEMORY_GRAPH_ENABLED) {
   if (graphEl) graphEl.style.display = "block";
   loadMemories();
@@ -3892,6 +3917,85 @@ initSettings({
   setTtsVoiceId: (voiceId) => { activeTTSVoiceId = voiceId; },
   setOpenSettings: (openSettings) => { openSettingsRef = openSettings; },
 });
+
+// ── 设置面板绑定（设置 DOM 由 app-shell.js 模板渲染，此处按 id 挂接） ─────────────
+// 回复提示音开关（默认开）
+const alertToggle = document.getElementById("alert-sound-toggle");
+if (alertToggle) {
+  alertToggle.checked = isAlertEnabled();
+  alertToggle.addEventListener("change", () => setAlertEnabled(alertToggle.checked));
+} else {
+  console.warn("[alert-sound] #alert-sound-toggle 未在设置 DOM 中找到——开关静默失效，请检查 app-shell.js 的设置模板");
+}
+
+// xz 来访者脱敏开关（写后端 config，影响 surface 投影）
+const xzRedactRow = document.getElementById("xz-redact-row");
+const xzRedactToggle = document.getElementById("xz-redact-toggle");
+if (xzRedactToggle) {
+  // 从 /settings 读取初始值 + 仅在 xz 工具启用时显示
+  fetch(`${API}/settings`).then(r => r.json()).then(s => {
+    if (s.llm && typeof s.llm.xzRedactMode === 'boolean') {
+      xzRedactToggle.checked = s.llm.xzRedactMode;
+      if (xzRedactRow) xzRedactRow.style.display = '';
+    }
+  }).catch(() => {});
+  xzRedactToggle.addEventListener("change", async () => {
+    try {
+      await fetch(`${API}/settings/xz-redact`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ xzRedactMode: xzRedactToggle.checked }),
+      });
+    } catch (e) { console.warn('[xz-redact] 保存失败', e); }
+  });
+}
+
+// xz 工具总开关：GET 回填 checkbox，POST { enabled } 保存。与 web-search 同款模板。
+const xzEnabledInput = document.getElementById("settings-xz-enabled");
+const saveXzBtn = document.getElementById("settings-save-xz");
+const xzFeedback = document.getElementById("settings-xz-feedback");
+
+// 局部 feedback 提示（与 settings.js showFeedback 同款样式类，避免跨模块耦合）
+function showXzFeedback(el, msg, isError = false) {
+  if (!el) return;
+  el.textContent = msg;
+  el.className = "settings-feedback" + (isError ? " error" : "");
+  if (msg) setTimeout(() => { el.textContent = ""; el.className = "settings-feedback"; }, 3000);
+}
+
+async function loadXzToolsSettings() {
+  try {
+    const data = await fetch(`${API}/settings/xz-tools`).then(r => r.json());
+    if (xzEnabledInput) xzEnabledInput.checked = !!data?.xzTools?.enabled;
+  } catch {}
+}
+loadXzToolsSettings();
+
+if (saveXzBtn) {
+  saveXzBtn.addEventListener("click", async () => {
+    const enabled = !!xzEnabledInput?.checked;
+    saveXzBtn.disabled = true;
+    try {
+      const res = await fetch(`${API}/settings/xz-tools`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showXzFeedback(xzFeedback, "已保存");
+        loadXzToolsSettings();
+      } else {
+        showXzFeedback(xzFeedback, data.error || "保存失败", true);
+      }
+    } catch {
+      showXzFeedback(xzFeedback, "请求失败", true);
+    } finally {
+      saveXzBtn.disabled = false;
+    }
+  });
+}
+
 // ── Voice panel ──
 initVoicePanel({
   btnId:      "voice-btn",

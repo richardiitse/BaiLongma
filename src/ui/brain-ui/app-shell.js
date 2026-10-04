@@ -313,6 +313,20 @@ const createSettingsModal = () => `
               <input id="settings-memory-graph-toggle" type="checkbox" style="width:auto;flex:none;">
               <span class="settings-feedback" id="settings-memory-graph-feedback" style="margin-left:8px;"></span>
             </div>
+            <div class="settings-row">
+              <label class="settings-label" for="alert-sound-toggle">回复提示音</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--ink2);">
+                <input type="checkbox" id="alert-sound-toggle" />
+                Jarvis 回复时的提示音（默认开）
+              </label>
+            </div>
+            <div class="settings-row" id="xz-redact-row" style="display:none;">
+              <label class="settings-label" for="xz-redact-toggle">来访者脱敏</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--ink2);">
+                <input type="checkbox" id="xz-redact-toggle" />
+                xz 卡片中来来访者显示代号（默认关）
+              </label>
+            </div>
           </div>
         </div>
 
@@ -920,6 +934,21 @@ const createSettingsModal = () => `
           <div class="settings-section">
             <div class="settings-section-label">共用范围</div>
             <p class="settings-hint">配置一次后，台风监测、天气灾害、位置卡片和后续地图页面都会通过统一 MapService 使用同一地图服务。</p>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-label">xz 工具</div>
+            <div class="settings-row">
+              <label class="settings-label" for="settings-xz-enabled">启用 xz-calendar / xz-notes</label>
+              <label class="settings-toggle">
+                <input type="checkbox" id="settings-xz-enabled">
+                <span class="settings-toggle-track"></span>
+              </label>
+            </div>
+            <p class="settings-hint">开启后，agent 可调用本机 xz-calendar（来访者/咨询师日历、预约、缴费）与 xz-notes（临床笔记、归档、安全）CLI。需对应 CLI 已安装且可执行（二进制路径可用环境变量 XZ_CALENDAR_CLI / XZ_NOTES_CLI 指定，否则需进入 PATH）。</p>
+            <div class="settings-row-action">
+              <button class="settings-save-btn" id="settings-save-xz" type="button">保存</button>
+              <span class="settings-feedback" id="settings-xz-feedback"></span>
+            </div>
           </div>
         </div>
 

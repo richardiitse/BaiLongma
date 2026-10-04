@@ -1,6 +1,7 @@
 import './network-proxy.js'
-import { config, getMinimaxKey as _getMinimaxKey, getSecurity } from './config.js'
+import { config, getMinimaxKey as _getMinimaxKey, getSecurity, getTurnEngine, isXzToolsEnabled } from './config.js'
 import { callLLM } from './llm.js'
+// runPiTurn 惰性加载（pi 分支动态 import），保证默认 llm 路径完全不加载 Pi SDK、零回归。
 import { buildSystemPrompt, buildContextBlock, combinePromptForPreview } from './prompt.js'
 import { enqueueTurnForRecognition, configureRecognizerScheduler } from './memory/recognizer-scheduler.js'
 import { runInjector, finalizeToolInjection, commitInformationConsumption, buildSupplementalInformationContext, formatMemoriesForPrompt, formatActivePoliciesForPrompt, formatTaskKnowledge, formatTemporalRecall } from './memory/injector.js'
@@ -56,7 +57,7 @@ import {
 import { truncateToolResultForUI } from './runtime/tool-result-preview.js'
 import { buildLLMMessages } from './runtime/messages.js'
 import { hasVerifiedScheduledDelivery } from './runtime/scheduled-tasks.js'
-import { parseMarkers } from './runtime/markers.js'
+import { finalizeEngineTurnResult } from './runtime/markers.js'
 import { createConsciousnessLoop } from './runtime/consciousness-loop.js'
 import { buildAutonomousTickDirections } from './runtime/tick-policy.js'
 import { buildStrictEvaluationContext, resolveStrictEvaluationMode } from './runtime/strict-evaluation.js'
@@ -67,6 +68,8 @@ import { isSoftwareInstallRequest } from './software-install-intent.js'
 import { getWeatherCardProps, isWeatherQuery } from './weather.js'
 import { startTyphoonAlertMonitor } from './typhoon-alert-monitor.js'
 import { scheduleSceneSurfaceRemoval } from './scene/transient-surfaces.js'
+import { buildXzSurface, xzSurfaceId, buildWorkbenchSurface, WORKBENCH_SURFACE_ID } from './capabilities/tools/xz-scene.js'
+import { execXzCalendar, execXzNotes } from './capabilities/tools/xz.js'
 import { createAwakeningManager } from './awakening.js'
 import { createTaskManager } from './task-manager.js'
 
@@ -710,6 +713,114 @@ async function projectWeatherSurfaceForTurn(message = '') {
   return { id, data, changed }
 }
 
+// ── xz 查询意图检测 ────────────────────────────────────────────────────
+// 轻量正则复用 capability-registry 的 XZ 关键词集，但额外要求「查询类」语义
+// （今日/列表/汇总），避免把写操作（创建/取消）也当成 core 直投目标。
+const XZ_QUERY_KEYWORD_RE = /今天.*预约|今日|排班|upcoming|overdue|来访者.*列表|client list|appointment list|缴费.*汇总|payment.summary|payment-summary/i
+
+function isXzQueryIntent(message = '') {
+  if (!isXzToolsEnabled()) return false
+  return XZ_QUERY_KEYWORD_RE.test(message)
+}
+
+// 从用户消息推断要执行的 xz_calendar 子命令。
+function inferXzCommand(message = '') {
+  const msg = String(message || '')
+  if (/今天|今日/.test(msg)) return 'today'
+  if (/upcoming|即将|接下来/.test(msg)) return 'upcoming'
+  if (/overdue|逾期|过期/.test(msg)) return 'overdue'
+  if (/来访者.*列表|client list/i.test(msg)) return 'client list'
+  if (/缴费.*汇总|payment.summary/i.test(msg)) return 'payment-summary'
+  if (/预约.*列表|appointment list/i.test(msg)) return 'appointment list'
+  return 'today'  // 默认 today（最高频）
+}
+
+// core 直接投影 xz 查询结果（仿 projectWeatherSurfaceForTurn 模式 A）。
+// 检测到 xz 查询意图 → 调 xz_calendar CLI → xz-scene 解析 → sceneStore.set。
+// 写操作不走这里（由 U2 的 confront 确认流处理）。
+
+// CLI 不可用时的引导卡（U6）：投影 choice+confront 卡片引导用户配置，而非纯文字报错。
+function projectXzMissingSurface(envelope) {
+  const isEnoent = envelope?.error?.includes('ENOENT') || envelope?.error?.includes('spawn')
+  const prompt = isEnoent
+    ? 'xz 工具未安装或不在 PATH 中。\n请在「设置 → 高级功能」启用 xz 工具，或确认 xz-calendar / xz-notes CLI 已安装。'
+    : `xz 工具调用失败：${envelope?.error || '未知错误'}`
+  const id = 'xz-cli-missing'
+  sceneStore.set(id, {
+    kind: 'choice',
+    intent: 'confront',
+    data: {
+      prompt,
+      options: [
+        { value: 'open-settings', label: '打开设置', tone: 'primary' },
+        { value: 'dismiss', label: '知道了', tone: 'default' },
+      ],
+    },
+  })
+  emitEvent('action', { tool: 'xz_cli_missing', summary: 'xz CLI 不可用，已弹出引导卡' })
+  return { id, changed: true, missing: true }
+}
+
+async function projectXzSurfaceForTurn(message = '') {
+  if (!isXzQueryIntent(message)) return null
+
+  const command = inferXzCommand(message)
+  const resultStr = await execXzCalendar({ command, args: ['--json'] }, {})
+  let envelope
+  try { envelope = JSON.parse(resultStr) } catch { return null }
+  if (!envelope || envelope.ok === false) {
+    // CLI 不可用（ENOENT 等）→ 投影引导卡，而非纯文字报错（U6）
+    return projectXzMissingSurface(envelope)
+  }
+
+  const surface = buildXzSurface(command, envelope.stdout)
+  if (!surface) return null
+
+  const id = surface.id
+  const changed = sceneStore.set(id, {
+    kind: surface.kind,
+    data: surface.data,
+    intent: surface.intent || 'inform',
+  })
+  if (changed) {
+    emitEvent('action', {
+      tool: 'xz_surface',
+      summary: `已投影 xz 查询结果（${command}）`,
+      detail: id,
+    })
+  }
+  return { id, changed }
+}
+
+// ── TICK 心跳刷新临床工作台（阶段 3 旗舰）──────────────────────────────
+// core 在 TICK 时检查工作台 surface 是否存在，存在则刷新（同 id morph），不存在则跳过。
+// 工作台由用户首次查询或显式请求创建（projectXzSurfaceForTurn 或 Agent ui_set），
+// TICK 只维持已在场的——不主动创建（不打扰用户）。
+// #7 in-flight 守卫：防重叠 TICK 堆积 CLI 进程。若已有刷新在跑，返回同一 promise。
+let _wbRefresh = null
+async function refreshWorkbenchIfPresent() {
+  if (_wbRefresh) return _wbRefresh  // 合并并发刷新请求
+  const existing = sceneStore.get(WORKBENCH_SURFACE_ID)
+  if (!existing) return null  // 工作台不在场 → 不主动创建
+
+  _wbRefresh = (async () => {
+    const surface = await buildWorkbenchSurface({
+      execCalendar: execXzCalendar,
+      execNotes: execXzNotes,
+    })
+    const changed = sceneStore.set(WORKBENCH_SURFACE_ID, {
+      kind: surface.kind,
+      data: surface.data,
+      intent: surface.intent,
+    })
+    if (changed) {
+      emitEvent('action', { tool: 'xz_workbench_refresh', summary: '工作台已刷新' })
+    }
+    return { changed }
+  })().finally(() => { _wbRefresh = null })
+  return _wbRefresh
+}
+
 async function runTurn(input, label, msg = null) {
   const sessionRef = newSessionRef()
   if (msg) msg.turnId = sessionRef
@@ -781,6 +892,7 @@ async function runTurn(input, label, msg = null) {
     })
 
     if (isTick) awakeningManager.ensureStartupSelfCheckState()
+    if (isTick && isXzToolsEnabled()) refreshWorkbenchIfPresent().catch((e) => { console.warn('[xz-workbench] refresh failed', e?.message || e) })  // #8 不阻塞但有日志
 
     // Key auto-config: if the user message contains an API key, silently configure it, purge the DB entry, notify frontend, and skip LLM
     let keyConfigFailDir = null
@@ -1014,10 +1126,14 @@ async function runTurn(input, label, msg = null) {
     const weatherSurfacePromise = (isUserTurn && msg && !silentSignal)
       ? projectWeatherSurfaceForTurn(msg.content || semanticInput)
       : Promise.resolve(null)
+    const xzSurfacePromise = (isUserTurn && msg && !silentSignal)
+      ? projectXzSurfaceForTurn(msg.content || semanticInput).catch(() => null)  // #6 隔离异常，防中断 runtimeInjection
+      : Promise.resolve(null)
     const [runtimeInjection, knowledgeInjection] = await Promise.all([
       runtimeInjectionPromise,
       knowledgeInjectionPromise,
       weatherSurfacePromise,
+      xzSurfacePromise,
     ])
     throwIfAborted(controller.signal)
 
@@ -1408,7 +1524,18 @@ async function runTurn(input, label, msg = null) {
     // 后端不再整段补一次 autoSpeakForVoiceReply，避免重复念。
     let curStreamMode = null
     let sawTextStream = false
-    llmResult = await callLLM({
+    // Slice 2 + 临时止血(A)：按 config.turnEngine 分流——'pi' 走 Pi SDK runPiTurn，否则 callLLM。
+    // 两者暴露同一 callback 面（onStream/onToolCall/onToolExecute/signal/toolContext），
+    // args 对象完全一致，外层 runTurn 逻辑（焦点栈/投递/标记解析）零改动。默认 'llm' 零回归。
+    // 但 pi 目前只支持 minimax provider（Slice 4 才接多 provider）：非 minimax 时显式回退 llm
+    // 并 warn，绝不静默用 minimax 顶替用户在配置页选的 provider。
+    const piMod = getTurnEngine() === 'pi' ? await import('./pi/turn-engine.js') : null
+    const usePi = !!(piMod && piMod.isPiSupportedForConfig())
+    if (piMod && !usePi) {
+      console.warn(`[pi] provider=${config.provider} 暂不被 pi 引擎支持（仅 minimax），本轮回退 llm 引擎`)
+    }
+    const turnEngine = usePi ? piMod.runPiTurn : callLLM
+    llmResult = await turnEngine({
       systemPrompt,
       message: semanticInput,
       messages: llmMessages,
@@ -1566,7 +1693,12 @@ async function runTurn(input, label, msg = null) {
     return
   }
 
-  const response = llmResult.content
+  // 汇合点收口（单一权威）：所有 turn 引擎（callLLM / runPiTurn）的输出在这里统一
+  // 「协议标记从 rawContent 解析、交付正文从 content 派生」（markers.js finalizeEngineTurnResult）。
+  // response 事件正文只来自引擎已清洗的 content——标记泄漏不随引擎选择回归；
+  // 协议副作用（RECALL/SET_TASK/UPDATE_PERSONA/MOOD）从未清洗原文解析，不依赖引擎
+  // 返回前恰好保留标记。缺 rawContent 的旧返回形状（中止路径等）优雅降级。
+  const { markers, response } = finalizeEngineTurnResult(llmResult)
 
   // Store tool result for injection on the next TICK
   state.lastToolResult = llmResult.toolResult || null
@@ -1636,8 +1768,7 @@ async function runTurn(input, label, msg = null) {
     }
   }
 
-  // 协议标记解析：单一真相源 src/runtime/markers.js（只解析，副作用留在下方原地）。
-  const markers = parseMarkers(response)
+  // 协议副作用在下方原地执行；markers 来自上方汇合点 finalizeTurnReply。
 
   // 4. Detect [RECALL: ...]
   if (markers.recall !== null) {
@@ -1654,6 +1785,14 @@ async function runTurn(input, label, msg = null) {
     setConfig('persona', newPersona)
     console.log('[system] Persona updated')
     emitEvent('persona_updated', { persona: newPersona.slice(0, 200) })
+  }
+
+  // 5b. Detect [MOOD: ...] —— Agent 本轮情绪自表达。剥离已在 markers.stripMarkers 完成
+  //     （流式 + 定稿都不让用户看见）；这里只把情绪词推给前端，用来在 ambient 底色之上
+  //     叠加一层「个性情绪」调制点云球（mood-ambient.js 的 setAgentMood）。
+  if (markers.mood !== null) {
+    const mood = markers.mood.trim().toLowerCase()
+    emitEvent('agent_mood', { mood })
   }
 
   // 6. Detect [SET_TASK: ...] / [CLEAR_TASK]
