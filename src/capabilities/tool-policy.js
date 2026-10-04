@@ -229,7 +229,7 @@ export function evaluateToolPolicy(name, args = {}, context = {}) {
     return {
       allowed: false,
       risk,
-      reason: 'clearing persistent browser data requires an explicit current user request naming Bailongma/Agent built-in browser data',
+      reason: 'clearing persistent browser data requires an explicit current user request naming Jarvis/Agent built-in browser data',
     }
   }
   const startupBrowserCheck = context.autonomous

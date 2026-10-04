@@ -2,7 +2,7 @@ import { API } from "./api-client.js";
 import { moveVoicePanelToBody, restoreVoicePanel, toggleHotspot } from "./hotspot.js";
 import { shouldHandlePttKeyEvent } from "./voice-ptt.js";
 
-const VOICE_SPACE_PTT_KEY = "bailongma-voice-space-ptt-enabled";
+const VOICE_SPACE_PTT_KEY = "jarvis-voice-space-ptt-enabled";
 
 // ── Media modes (video / image) ──
 export function initMediaModes() {
@@ -117,7 +117,7 @@ export function initMediaModes() {
     videoBtn?.classList.toggle("active", videoActive);
     if (videoActive) moveVoicePanelToBody();
     else restoreVoicePanel();
-    window.dispatchEvent(new CustomEvent("bailongma:video-mode", {
+    window.dispatchEvent(new CustomEvent("jarvis:video-mode", {
       detail: { active: videoActive, kind: videoKind },
     }));
   }
@@ -365,7 +365,7 @@ export function initMediaModes() {
       else controlVideo(payload);
       return { ok: true, mode: "video", action };
     }
-    if (mode === "music" && window.bailongma?.platform === "darwin") {
+    if (mode === "music" && window.jarvis?.platform === "darwin") {
       return { ok: false, mode: "music", action, error: "Use macOS Music.app via system_music" };
     }
     if (mode === "music") {
@@ -402,7 +402,7 @@ export function initMediaModes() {
   let playlist     = [];
   let playlistIdx  = 0;
   let isSeeking    = false;
-  const systemMusicOnly = window.bailongma?.platform === "darwin";
+  const systemMusicOnly = window.jarvis?.platform === "darwin";
   if (systemMusicOnly) {
     musicBtn?.remove();
     document.getElementById("music-panel")?.remove();
@@ -430,7 +430,7 @@ export function initMediaModes() {
     musicActive = Boolean(visible);
     document.body.classList.toggle("music-mode", musicActive);
     musicBtn?.classList.toggle("active", musicActive);
-    window.dispatchEvent(new CustomEvent("bailongma:music-mode", {
+    window.dispatchEvent(new CustomEvent("jarvis:music-mode", {
       detail: { active: musicActive },
     }));
   }
@@ -613,8 +613,8 @@ export function initMediaModes() {
     }
   });
 
-  window.bailongmaMedia = { handle: handleMediaCommand, showVideo, controlVideo, showImage, showCamera, showMusic, controlMusic };
-  window.addEventListener("bailongma:media", (event) => handleMediaCommand(event.detail || {}));
+  window.jarvisMedia = { handle: handleMediaCommand, showVideo, controlVideo, showImage, showCamera, showMusic, controlMusic };
+  window.addEventListener("jarvis:media", (event) => handleMediaCommand(event.detail || {}));
 
   // Push-to-talk：按住空格说话；Agent 正在说话时按下空格直接打断
   (() => {
@@ -631,7 +631,7 @@ export function initMediaModes() {
       document.body.classList.add("ptt-active");
       // 不论是否在播，stopTTS 内部已做 no-op 守卫
       try { window.stopTTS?.(); } catch {}
-      window.bailongmaVoice?.pttStart?.();
+      window.jarvisVoice?.pttStart?.();
     }, { capture: true });
 
     window.addEventListener("keyup", (e) => {
@@ -641,7 +641,7 @@ export function initMediaModes() {
       pttHeld = false;
       document.body.classList.remove("ptt-active");
       e.preventDefault();
-      window.bailongmaVoice?.pttEnd?.();
+      window.jarvisVoice?.pttEnd?.();
     }, { capture: true });
 
     // 切到后台/失焦（如点开 DevTools、切窗口）时如果还按着，强制释放 PTT，避免 mic 永远不关。
@@ -650,7 +650,7 @@ export function initMediaModes() {
       if (!pttHeld) return;
       pttHeld = false;
       document.body.classList.remove("ptt-active");
-      window.bailongmaVoice?.pttEnd?.({ send: false });
+      window.jarvisVoice?.pttEnd?.({ send: false });
     });
   })();
 

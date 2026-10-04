@@ -516,7 +516,7 @@ function normalizeCapture(capture, { label = 'capture' } = {}) {
   let requests
   let pageSnapshots = []
   let source
-  if (capture?.kind === 'bailongma-network-audit' && Array.isArray(capture.events)) {
+  if (capture?.kind === 'jarvis-network-audit' && Array.isArray(capture.events)) {
     requests = aggregateRecorderCapture(capture)
     pageSnapshots = Array.isArray(capture.pageSnapshots) ? capture.pageSnapshots : []
     source = capture.source || 'electron-webcontents-cdp'
@@ -524,7 +524,7 @@ function normalizeCapture(capture, { label = 'capture' } = {}) {
     requests = normalizeHarCapture(capture)
     source = 'har'
   } else {
-    throw new TypeError(`${label} is not a supported Bailongma audit JSON or HAR file`)
+    throw new TypeError(`${label} is not a supported Jarvis audit JSON or HAR file`)
   }
   const firstRequestMs = requests.reduce((minimum, request) => {
     const time = Number(request.tMs)
@@ -676,65 +676,65 @@ function difference(left, right) {
   return left.filter(value => !rightSet.has(value))
 }
 
-function detectRiskSignals(chromeSummary, bailongmaSummary) {
+function detectRiskSignals(chromeSummary, jarvisSummary) {
   const signals = []
-  const bailongmaUa = bailongmaSummary.fingerprintHeaders.userAgent.join(' ')
-  const bailongmaBrands = bailongmaSummary.fingerprintHeaders.secChUa.join(' ')
+  const jarvisUa = jarvisSummary.fingerprintHeaders.userAgent.join(' ')
+  const jarvisBrands = jarvisSummary.fingerprintHeaders.secChUa.join(' ')
   const chromeWebdriverValues = chromeSummary.pageEnvironment
     .map(snapshot => snapshot.navigator?.webdriver)
     .filter(value => value !== undefined && value !== null)
-  const bailongmaWebdriverValues = bailongmaSummary.pageEnvironment
+  const jarvisWebdriverValues = jarvisSummary.pageEnvironment
     .map(snapshot => snapshot.navigator?.webdriver)
     .filter(value => value !== undefined && value !== null)
 
-  if (/electron/i.test(bailongmaUa) || /electron/i.test(bailongmaBrands)) {
+  if (/electron/i.test(jarvisUa) || /electron/i.test(jarvisBrands)) {
     signals.push({ level: '极高', fact: true, signal: 'UA 或 Client Hints 直接包含 Electron 品牌。' })
   }
   if (
-    bailongmaWebdriverValues.includes(true)
+    jarvisWebdriverValues.includes(true)
     && chromeWebdriverValues.includes(false)
     && !chromeWebdriverValues.includes(true)
   ) {
-    signals.push({ level: '极高', fact: true, signal: '仅白龙马页面环境快照中 navigator.webdriver 为 true。' })
-  } else if (bailongmaWebdriverValues.includes(true) && chromeWebdriverValues.includes(true)) {
+    signals.push({ level: '极高', fact: true, signal: '仅Jarvis页面环境快照中 navigator.webdriver 为 true。' })
+  } else if (jarvisWebdriverValues.includes(true) && chromeWebdriverValues.includes(true)) {
     signals.push({
       level: '低',
       fact: true,
       signal: '两组页面环境快照中的 navigator.webdriver 都为 true；该字段在本次采集中不能区分两组，且应检查 CDP 启动参数造成的污染。',
     })
-  } else if (bailongmaWebdriverValues.includes(true) && chromeWebdriverValues.length === 0) {
+  } else if (jarvisWebdriverValues.includes(true) && chromeWebdriverValues.length === 0) {
     signals.push({
       level: '极高',
       fact: true,
-      signal: '白龙马页面环境快照中 navigator.webdriver 为 true；基线 HAR 不含此字段，不能据此声称“仅白龙马”为 true。',
+      signal: 'Jarvis页面环境快照中 navigator.webdriver 为 true；基线 HAR 不含此字段，不能据此声称“仅Jarvis”为 true。',
     })
   }
   if (
     chromeSummary.fingerprintHeaders.userAgent.length
-    && bailongmaSummary.fingerprintHeaders.userAgent.length
-    && JSON.stringify(chromeSummary.fingerprintHeaders.userAgent) !== JSON.stringify(bailongmaSummary.fingerprintHeaders.userAgent)
+    && jarvisSummary.fingerprintHeaders.userAgent.length
+    && JSON.stringify(chromeSummary.fingerprintHeaders.userAgent) !== JSON.stringify(jarvisSummary.fingerprintHeaders.userAgent)
   ) {
     signals.push({ level: '高', fact: true, signal: '两组 User-Agent 不一致，可被低成本服务端规则直接分组。' })
   }
   if (
     chromeSummary.fingerprintHeaders.secChUa.length
-    && bailongmaSummary.fingerprintHeaders.secChUa.length
-    && JSON.stringify(chromeSummary.fingerprintHeaders.secChUa) !== JSON.stringify(bailongmaSummary.fingerprintHeaders.secChUa)
+    && jarvisSummary.fingerprintHeaders.secChUa.length
+    && JSON.stringify(chromeSummary.fingerprintHeaders.secChUa) !== JSON.stringify(jarvisSummary.fingerprintHeaders.secChUa)
   ) {
     signals.push({ level: '高', fact: true, signal: '两组 sec-ch-ua 品牌/版本不一致。' })
   }
   const chromeHeaders = chromeSummary.requestHeaderNames
-  const bailongmaHeaders = bailongmaSummary.requestHeaderNames
-  const chromeOnly = difference(chromeHeaders, bailongmaHeaders)
-  const bailongmaOnly = difference(bailongmaHeaders, chromeHeaders)
-  if (chromeOnly.length || bailongmaOnly.length) {
+  const jarvisHeaders = jarvisSummary.requestHeaderNames
+  const chromeOnly = difference(chromeHeaders, jarvisHeaders)
+  const jarvisOnly = difference(jarvisHeaders, chromeHeaders)
+  if (chromeOnly.length || jarvisOnly.length) {
     signals.push({
       level: '中',
       fact: true,
-      signal: `请求头字段集合不同（人工基线独有 ${chromeOnly.length}，白龙马独有 ${bailongmaOnly.length}）。`,
+      signal: `请求头字段集合不同（人工基线独有 ${chromeOnly.length}，Jarvis独有 ${jarvisOnly.length}）。`,
     })
   }
-  if (JSON.stringify(chromeSummary.protocols) !== JSON.stringify(bailongmaSummary.protocols)) {
+  if (JSON.stringify(chromeSummary.protocols) !== JSON.stringify(jarvisSummary.protocols)) {
     signals.push({ level: '中', fact: false, signal: '协议分布不同；可能来自客户端栈，也可能只是缓存、连接或采集条件差异。' })
   }
   if (!signals.length) {
@@ -743,52 +743,52 @@ function detectRiskSignals(chromeSummary, bailongmaSummary) {
   return signals
 }
 
-function compareCaptures(chromeCapture, bailongmaCapture) {
+function compareCaptures(chromeCapture, jarvisCapture) {
   const chrome = normalizeCapture(chromeCapture, { label: 'chrome' })
-  const bailongma = normalizeCapture(bailongmaCapture, { label: 'bailongma' })
+  const jarvis = normalizeCapture(jarvisCapture, { label: 'jarvis' })
   const chromeSummary = summarizeCapture(chrome)
-  const bailongmaSummary = summarizeCapture(bailongma)
-  const endpointsOnlyInChrome = difference(Object.keys(chromeSummary.endpoints), Object.keys(bailongmaSummary.endpoints))
-  const endpointsOnlyInBailongma = difference(Object.keys(bailongmaSummary.endpoints), Object.keys(chromeSummary.endpoints))
+  const jarvisSummary = summarizeCapture(jarvis)
+  const endpointsOnlyInChrome = difference(Object.keys(chromeSummary.endpoints), Object.keys(jarvisSummary.endpoints))
+  const endpointsOnlyInJarvis = difference(Object.keys(jarvisSummary.endpoints), Object.keys(chromeSummary.endpoints))
   const chromeEndpointDiff = partitionEndpointDifferences(endpointsOnlyInChrome, chrome)
-  const bailongmaEndpointDiff = partitionEndpointDifferences(endpointsOnlyInBailongma, bailongma)
+  const jarvisEndpointDiff = partitionEndpointDifferences(endpointsOnlyInJarvis, jarvis)
   return {
     schemaVersion: 1,
-    kind: 'bailongma-network-comparison',
+    kind: 'jarvis-network-comparison',
     normalized: true,
     redacted: true,
     chrome: chromeSummary,
-    bailongma: bailongmaSummary,
+    jarvis: jarvisSummary,
     differences: {
       endpointsOnlyInChrome,
-      endpointsOnlyInBailongma,
+      endpointsOnlyInJarvis,
       materialEndpointsOnlyInChrome: chromeEndpointDiff.material,
-      materialEndpointsOnlyInBailongma: bailongmaEndpointDiff.material,
+      materialEndpointsOnlyInJarvis: jarvisEndpointDiff.material,
       normalizedEndpointNoise: {
         chrome: chromeEndpointDiff.normalizedNoise,
-        bailongma: bailongmaEndpointDiff.normalizedNoise,
+        jarvis: jarvisEndpointDiff.normalizedNoise,
       },
-      requestHeadersOnlyInChrome: difference(chromeSummary.requestHeaderNames, bailongmaSummary.requestHeaderNames),
-      requestHeadersOnlyInBailongma: difference(bailongmaSummary.requestHeaderNames, chromeSummary.requestHeaderNames),
-      queryParameterNamesOnlyInChrome: difference(chromeSummary.queryParameterNames, bailongmaSummary.queryParameterNames),
-      queryParameterNamesOnlyInBailongma: difference(bailongmaSummary.queryParameterNames, chromeSummary.queryParameterNames),
-      diagnosticHeaders: { chrome: chromeSummary.diagnosticHeaders, bailongma: bailongmaSummary.diagnosticHeaders },
+      requestHeadersOnlyInChrome: difference(chromeSummary.requestHeaderNames, jarvisSummary.requestHeaderNames),
+      requestHeadersOnlyInJarvis: difference(jarvisSummary.requestHeaderNames, chromeSummary.requestHeaderNames),
+      queryParameterNamesOnlyInChrome: difference(chromeSummary.queryParameterNames, jarvisSummary.queryParameterNames),
+      queryParameterNamesOnlyInJarvis: difference(jarvisSummary.queryParameterNames, chromeSummary.queryParameterNames),
+      diagnosticHeaders: { chrome: chromeSummary.diagnosticHeaders, jarvis: jarvisSummary.diagnosticHeaders },
       fingerprintHeaders: {
         chrome: chromeSummary.fingerprintHeaders,
-        bailongma: bailongmaSummary.fingerprintHeaders,
+        jarvis: jarvisSummary.fingerprintHeaders,
       },
-      protocols: { chrome: chromeSummary.protocols, bailongma: bailongmaSummary.protocols },
-      transport: { chrome: chromeSummary.transport, bailongma: bailongmaSummary.transport },
-      cookieState: { chrome: chromeSummary.cookies, bailongma: bailongmaSummary.cookies },
-      hasUserGesture: { chrome: chromeSummary.hasUserGesture, bailongma: bailongmaSummary.hasUserGesture },
-      timeline: { chrome: chromeSummary.timeline, bailongma: bailongmaSummary.timeline },
+      protocols: { chrome: chromeSummary.protocols, jarvis: jarvisSummary.protocols },
+      transport: { chrome: chromeSummary.transport, jarvis: jarvisSummary.transport },
+      cookieState: { chrome: chromeSummary.cookies, jarvis: jarvisSummary.cookies },
+      hasUserGesture: { chrome: chromeSummary.hasUserGesture, jarvis: jarvisSummary.hasUserGesture },
+      timeline: { chrome: chromeSummary.timeline, jarvis: jarvisSummary.timeline },
       requestHeaderOrderSignatures: {
         chrome: chromeSummary.requestHeaderOrderSignatures,
-        bailongma: bailongmaSummary.requestHeaderOrderSignatures,
+        jarvis: jarvisSummary.requestHeaderOrderSignatures,
         caveat: 'HAR/CDP 均不保证这是最终 HTTP/2、HTTP/3 或线上线序；只能比较采集 API 暴露的顺序。',
       },
     },
-    riskSignals: detectRiskSignals(chromeSummary, bailongmaSummary),
+    riskSignals: detectRiskSignals(chromeSummary, jarvisSummary),
     limitations: [
       'HAR 通常不包含 navigator.webdriver、精确 hasUserGesture、Cookie 分区详情或完整连接/TLS 信息。',
       '为避免保存敏感信息，本工具不保留请求/响应正文；正文中的行为遥测只能由接口出现与时序间接推断。',

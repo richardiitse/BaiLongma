@@ -72,7 +72,7 @@ import { createTaskManager } from './task-manager.js'
 
 function reportStartupProgress(id, status, detail, message) {
   try {
-    const reporter = globalThis.bailongmaStartupProgress
+    const reporter = globalThis.jarvisStartupProgress
     if (typeof reporter === 'function') reporter({ id, status, detail, message })
   } catch {}
 }
@@ -137,7 +137,7 @@ await withStartupTimeout(loadInstalledTools(), 12000, '[startup] installed-tools
 reportStartupProgress('tools', 'done', '工具槽已加载', '工具槽已加载')
 
 // Connect enabled local MCP stdio servers and cache their tool catalogs. MCP is
-// optional: one broken external server must never block the Bailongma API/agent.
+// optional: one broken external server must never block the Jarvis API/agent.
 reportStartupProgress('mcp', 'running', '连接已启用的 MCP Server', '正在加载 MCP 工具')
 await withStartupTimeout(startMcpClients(), 30000, '[startup] mcp-clients')
 reportStartupProgress('mcp', 'done', 'MCP 工具已加载', 'MCP 工具已加载')
@@ -948,7 +948,7 @@ async function runTurn(input, label, msg = null) {
       if (preliminaryActionContract.id === 'browser_screenshot') {
         directions.unshift('Screenshot contract: keep the current card/window mode unchanged. Call browser_take_screenshot directly, then send exactly screenshot.image_path with no unrelated caption or facts from earlier turns.')
       } else if (preliminaryActionContract.id === 'browser_display_mode') {
-        directions.unshift('Browser display contract: browser_set_display_mode changes the Bailongma card/window presentation. Do not use page zoom or keyboard shortcuts such as Control+Equal.')
+        directions.unshift('Browser display contract: browser_set_display_mode changes the Jarvis card/window presentation. Do not use page zoom or keyboard shortcuts such as Control+Equal.')
       }
     }
     if (isUserTurn && msg) {
@@ -1794,9 +1794,9 @@ async function main() {
   }
 
   // Start HTTP(S) API — must start regardless of activation status; the activation page depends on it
-  const apiPort = Number(process.env.BAILONGMA_PORT) || 3721
-  const apiProtocol = process.env.BAILONGMA_TLS_PFX
-    || (process.env.BAILONGMA_TLS_CERT && process.env.BAILONGMA_TLS_KEY)
+  const apiPort = Number(process.env.JARVIS_PORT) || 3721
+  const apiProtocol = process.env.JARVIS_TLS_PFX
+    || (process.env.JARVIS_TLS_CERT && process.env.JARVIS_TLS_KEY)
     ? 'https'
     : 'http'
   reportStartupProgress('api', 'running', `准备监听 ${apiProtocol}://127.0.0.1:${apiPort}`, '正在启动本地 API')

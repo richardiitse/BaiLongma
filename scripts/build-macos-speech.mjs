@@ -86,7 +86,7 @@ function compileArch(targetArch, targetOutput) {
 function adHocSign(file) {
   const result = spawnSync('codesign', [
     '--force',
-    '--identifier', 'com.xiaoyuanda.bailongma.speech-helper',
+    '--identifier', 'com.richardiitse.jarvis.speech-helper',
     '--sign', '-',
     file,
   ], { stdio: 'inherit' })

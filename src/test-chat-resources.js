@@ -4,10 +4,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { once } from 'node:events'
 
-const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bailongma-chat-resources-'))
-process.env.BAILONGMA_USER_DIR = tempRoot
-process.env.BAILONGMA_RESOURCES_DIR = process.cwd()
-process.env.BAILONGMA_HOST = '127.0.0.1'
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-chat-resources-'))
+process.env.JARVIS_USER_DIR = tempRoot
+process.env.JARVIS_RESOURCES_DIR = process.cwd()
+process.env.JARVIS_HOST = '127.0.0.1'
 
 let server = null
 let closeDBForTest = null

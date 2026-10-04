@@ -7,8 +7,8 @@ const {
 } = require('./updater-config.cjs')
 
 assert.equal(
-  resolveUpdaterConfigPath({ resourcesPath: '/Applications/Bailongma.app/Contents/Resources' }),
-  '/Applications/Bailongma.app/Contents/Resources/app-update.yml',
+  resolveUpdaterConfigPath({ resourcesPath: '/Applications/Jarvis.app/Contents/Resources' }),
+  '/Applications/Jarvis.app/Contents/Resources/app-update.yml',
 )
 assert.equal(hasPackagedUpdaterConfig({ resourcesPath: '/missing', existsSync: () => false }), false)
 assert.equal(hasPackagedUpdaterConfig({ resourcesPath: '/present', existsSync: () => true }), true)

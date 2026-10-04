@@ -38,7 +38,7 @@ export function initAIVideoMode() {
 
   function setActive(on){
     active=!!on; document.body.classList.toggle("aivideo-mode", active);
-    if(active){ try{ window.bailongmaMedia&&window.bailongmaMedia.controlVideo&&window.bailongmaMedia.controlVideo({action:"pause"}); }catch(e){} document.body.classList.remove("video-mode"); }
+    if(active){ try{ window.jarvisMedia&&window.jarvisMedia.controlVideo&&window.jarvisMedia.controlVideo({action:"pause"}); }catch(e){} document.body.classList.remove("video-mode"); }
     syncDraft(true);   // 开/关状态立即同步
   }
 
@@ -213,8 +213,8 @@ export function initAIVideoMode() {
     if(action==="ready"){ job.status="done"; job.videoUrl=data.videoUrl; renderQueue(); if(!active) setActive(true); loadPlayer(job); return; }
     if(action==="error"){ job.status="fail"; job.error=data.message||"生成失败"; renderQueue(); return; }
   }
-  window.addEventListener("bailongma:aivideo", function(e){ handle(e.detail||{}); });
-  window.bailongmaAIVideo={ handle:handle, open:openPanel, close:closePanel };
+  window.addEventListener("jarvis:aivideo", function(e){ handle(e.detail||{}); });
+  window.jarvisAIVideo={ handle:handle, open:openPanel, close:closePanel };
 
   renderDropzone(); updateMode(); renderQueue(); autoGrow();
   hydrateHistory();   // 初始化即重建一次（覆盖 app 重启/渲染进程重载后的历史恢复）

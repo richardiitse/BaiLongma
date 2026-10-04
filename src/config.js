@@ -35,7 +35,7 @@ export const DEFAULT_CONTEXT_MESSAGE_LIMIT = 20
 export const CONTEXT_TOOL_LIMIT_MIN = 0
 export const DEFAULT_CONTEXT_TOOL_LIMIT = 5
 
-const BAILONGMA_CHROME_BROWSER_TOOLS = Object.freeze([
+const JARVIS_CHROME_BROWSER_TOOLS = Object.freeze([
   'browser_navigate',
   'browser_navigate_back',
   'browser_navigate_forward',
@@ -61,12 +61,12 @@ const BAILONGMA_CHROME_BROWSER_TOOLS = Object.freeze([
 const LEGACY_BLOCKED_TOOL_MIGRATIONS = Object.freeze({
   // Keep the former UI key readable so an existing security configuration
   // still blocks the same public browser_* authority after the migration.
-  playwright_browser: BAILONGMA_CHROME_BROWSER_TOOLS,
-  chrome_devtools_browser: BAILONGMA_CHROME_BROWSER_TOOLS,
-  web_search: BAILONGMA_CHROME_BROWSER_TOOLS,
-  web_read: BAILONGMA_CHROME_BROWSER_TOOLS,
-  fetch_url: BAILONGMA_CHROME_BROWSER_TOOLS,
-  browser_read: BAILONGMA_CHROME_BROWSER_TOOLS,
+  playwright_browser: JARVIS_CHROME_BROWSER_TOOLS,
+  chrome_devtools_browser: JARVIS_CHROME_BROWSER_TOOLS,
+  web_search: JARVIS_CHROME_BROWSER_TOOLS,
+  web_read: JARVIS_CHROME_BROWSER_TOOLS,
+  fetch_url: JARVIS_CHROME_BROWSER_TOOLS,
+  browser_read: JARVIS_CHROME_BROWSER_TOOLS,
   exec_command: ['run_command'],
   exec_quick_command: ['run_command'],
   exec_task_command: ['run_command'],
@@ -1541,7 +1541,7 @@ export function setSecurity(updates) {
 }
 
 export function getLanAccessToken({ ensure = false } = {}) {
-  const envToken = String(globalThis.process?.env?.BAILONGMA_API_TOKEN || '').trim()
+  const envToken = String(globalThis.process?.env?.JARVIS_API_TOKEN || '').trim()
   if (envToken) return envToken
   if (config.network.accessToken) return config.network.accessToken
   if (!ensure) return ''
@@ -1553,19 +1553,19 @@ export function getLanAccessToken({ ensure = false } = {}) {
 
 export function getNetworkConfig() {
   const allowLanAccess = !!config.network.allowLanAccess
-    || /^(1|true|yes|on)$/i.test(String(globalThis.process?.env?.BAILONGMA_ALLOW_LAN || '').trim())
+    || /^(1|true|yes|on)$/i.test(String(globalThis.process?.env?.JARVIS_ALLOW_LAN || '').trim())
   const accessToken = allowLanAccess ? getLanAccessToken({ ensure: true }) : ''
-  const port = Number(globalThis.process?.env?.BAILONGMA_PORT) || 3721
+  const port = Number(globalThis.process?.env?.JARVIS_PORT) || 3721
   const httpsEnabled = allowLanAccess || Boolean(
-    globalThis.process?.env?.BAILONGMA_TLS_PFX
-    || (globalThis.process?.env?.BAILONGMA_TLS_CERT && globalThis.process?.env?.BAILONGMA_TLS_KEY)
+    globalThis.process?.env?.JARVIS_TLS_PFX
+    || (globalThis.process?.env?.JARVIS_TLS_CERT && globalThis.process?.env?.JARVIS_TLS_KEY)
   )
   const protocol = httpsEnabled ? 'https' : 'http'
   const accessEntries = allowLanAccess
     ? getPrivateLanAddresses().map(address => ({
         address,
         url: `${protocol}://${address}:${port}/#token=${encodeURIComponent(accessToken)}`,
-        certificateUrl: `${protocol}://${address}:${port}/bailongma-lan-root-ca.cer`,
+        certificateUrl: `${protocol}://${address}:${port}/jarvis-lan-root-ca.cer`,
       }))
     : []
   return {

@@ -30,7 +30,7 @@ function New-LanCertificates {
 
   New-Item -ItemType Directory -Force -Path $LanDir | Out-Null
   $rootPfx = Join-Path $LanDir 'root-ca.pfx'
-  $rootCer = Join-Path $LanDir 'bailongma-lan-root-ca.cer'
+  $rootCer = Join-Path $LanDir 'jarvis-lan-root-ca.cer'
   $serverPfx = Join-Path $LanDir 'server.pfx'
   $passwordFile = Join-Path $LanDir 'pfx-passphrase.txt'
   $metadataFile = Join-Path $LanDir 'certificate-metadata.json'
@@ -52,7 +52,7 @@ function New-LanCertificates {
   if ($rootNeedsCreation) {
     $root = New-SelfSignedCertificate `
       -Type Custom `
-      -Subject 'CN=Bailongma LAN Root CA' `
+      -Subject 'CN=Jarvis LAN Root CA' `
       -CertStoreLocation 'Cert:\CurrentUser\My' `
       -KeyAlgorithm RSA `
       -KeyLength 2048 `
@@ -95,7 +95,7 @@ function New-LanCertificates {
 
     $server = New-SelfSignedCertificate `
       -Type Custom `
-      -Subject 'CN=Bailongma LAN' `
+      -Subject 'CN=Jarvis LAN' `
       -Signer $root `
       -CertStoreLocation 'Cert:\CurrentUser\My' `
       -KeyAlgorithm RSA `
@@ -124,10 +124,10 @@ function New-LanCertificates {
   }
 }
 
-$env:BAILONGMA_HOST = '0.0.0.0'
-$env:BAILONGMA_ALLOW_LAN = '1'
-if (!$env:BAILONGMA_API_TOKEN) {
-  $env:BAILONGMA_API_TOKEN = New-RandomBase64Url 32
+$env:JARVIS_HOST = '0.0.0.0'
+$env:JARVIS_ALLOW_LAN = '1'
+if (!$env:JARVIS_API_TOKEN) {
+  $env:JARVIS_API_TOKEN = New-RandomBase64Url 32
 }
 
 $addresses = Get-NetIPAddress -AddressFamily IPv4 |
@@ -143,21 +143,21 @@ if (!$addresses) {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $tls = New-LanCertificates -LanDir (Join-Path $repoRoot 'data\lan-tls') -Addresses $addresses
-$env:BAILONGMA_TLS_PFX = $tls.Pfx
-$env:BAILONGMA_TLS_PFX_PASSPHRASE = $tls.Passphrase
-$env:BAILONGMA_LAN_CA_CERT = $tls.RootCertificate
+$env:JARVIS_TLS_PFX = $tls.Pfx
+$env:JARVIS_TLS_PFX_PASSPHRASE = $tls.Passphrase
+$env:JARVIS_LAN_CA_CERT = $tls.RootCertificate
 
 Write-Host ''
-Write-Host 'Bailongma secure LAN mode is enabled.'
+Write-Host 'Jarvis secure LAN mode is enabled.'
 Write-Host ''
 Write-Host 'First-time iPad setup:'
 Write-Host '  1. Open the certificate URL below and install the downloaded profile.'
 Write-Host '  2. In Settings > General > About > Certificate Trust Settings, enable full trust.'
-Write-Host '  3. Open the matching Bailongma URL. The pairing token is removed from the address bar automatically.'
+Write-Host '  3. Open the matching Jarvis URL. The pairing token is removed from the address bar automatically.'
 Write-Host ''
 foreach ($address in $addresses) {
-  Write-Host "Certificate: https://$address`:3721/bailongma-lan-root-ca.cer"
-  Write-Host "Bailongma:   https://$address`:3721/#token=$($env:BAILONGMA_API_TOKEN)"
+  Write-Host "Certificate: https://$address`:3721/jarvis-lan-root-ca.cer"
+  Write-Host "Jarvis:   https://$address`:3721/#token=$($env:JARVIS_API_TOKEN)"
 }
 Write-Host ''
 Write-Host "Root certificate file: $($tls.RootCertificate)"

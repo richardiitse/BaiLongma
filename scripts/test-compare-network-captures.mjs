@@ -4,11 +4,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { runComparison } from './compare-network-captures.mjs'
 
-const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bailongma-network-compare-'))
+const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-network-compare-'))
 try {
   const secret = 'comparison-input-secret'
   const chromeFile = path.join(testRoot, 'chrome.har')
-  const bailongmaFile = path.join(testRoot, 'bailongma.json')
+  const jarvisFile = path.join(testRoot, 'jarvis.json')
   const reportFile = path.join(testRoot, 'report.md')
   const jsonFile = path.join(testRoot, 'comparison.json')
   fs.writeFileSync(chromeFile, JSON.stringify({
@@ -24,8 +24,8 @@ try {
       }],
     },
   }))
-  fs.writeFileSync(bailongmaFile, JSON.stringify({
-    kind: 'bailongma-network-audit',
+  fs.writeFileSync(jarvisFile, JSON.stringify({
+    kind: 'jarvis-network-audit',
     source: 'electron-webcontents-cdp',
     events: [{
       name: 'Network.requestWillBeSent',
@@ -50,7 +50,7 @@ try {
 
   const result = runComparison({
     chrome: chromeFile,
-    bailongma: bailongmaFile,
+    jarvis: jarvisFile,
     output: reportFile,
     'json-output': jsonFile,
   })
@@ -62,7 +62,7 @@ try {
   assert.equal(fs.readFileSync(jsonFile, 'utf8').includes(secret), false)
   console.log('network capture comparison CLI tests passed')
 } finally {
-  if (path.basename(testRoot).startsWith('bailongma-network-compare-')) {
+  if (path.basename(testRoot).startsWith('jarvis-network-compare-')) {
     fs.rmSync(testRoot, { recursive: true, force: true })
   }
 }

@@ -15,11 +15,11 @@ import {
 
 export const RELEASE_CONSTANTS = Object.freeze({
   sshHost: 'xiaobailong-update-hk',
-  origin: 'https://updates.bailongma.ai',
-  downloadOrigin: 'https://download.bailongma.ai',
-  bucket: 'bailongma-updates-hk-prod',
-  serverRoot: '/srv/bailongma-updates',
-  updaterHeader: 'BailongmaUpdater/2',
+  origin: 'https://updates.jarvis.ai',
+  downloadOrigin: 'https://download.jarvis.ai',
+  bucket: 'jarvis-updates-hk-prod',
+  serverRoot: '/srv/jarvis-updates',
+  updaterHeader: 'JarvisUpdater/2',
   channel: 'stable',
 })
 
@@ -131,7 +131,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 10_000) {
 async function getRemoteVersion(arch, { accelerated = false } = {}) {
   const response = await fetchWithTimeout(
     `${RELEASE_CONSTANTS.origin}/stable/mac/${arch}/latest-mac.yml`,
-    accelerated ? { headers: { 'X-Bailongma-Updater': RELEASE_CONSTANTS.updaterHeader } } : {},
+    accelerated ? { headers: { 'X-Jarvis-Updater': RELEASE_CONSTANTS.updaterHeader } } : {},
   )
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   const text = await response.text()
@@ -248,7 +248,7 @@ async function checkArchitecture({ root, productName, version, arch, scan }) {
     result.blockmaps = { ok: false, error: redactLog(error.message) }
   }
 
-  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), `bailongma-release-${arch}-`))
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), `jarvis-release-${arch}-`))
   const mountPoint = path.join(tempDir, 'mount')
   await fsp.mkdir(mountPoint)
   let mounted = false
@@ -380,5 +380,5 @@ export async function createMacReleasePlan({ root, productName, version, archs, 
 }
 
 export function historyDirectory() {
-  return path.join(os.homedir(), 'Library', 'Application Support', 'Bailongma Release Console', 'releases')
+  return path.join(os.homedir(), 'Library', 'Application Support', 'Jarvis Release Console', 'releases')
 }
