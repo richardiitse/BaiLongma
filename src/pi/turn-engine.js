@@ -6,11 +6,10 @@
 //   【系统 node】子进程跑 worker.mjs（= smoke 环境），主进程经 IPC 驱动。
 //   工具执行（executeTool）需 BaiLongma 运行时（db/sandbox，Electron-bound，worker 没有），
 //   worker 经 exec_tool_req/res RPC 回调本进程执行。见 learned skill: electron-runtime-isolation。
-import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { fork, spawnSync } from 'node:child_process'
-import { sanitizeAssistantReplyForDelivery } from '../runtime/markers.js'
+import { shapePiTurnResult } from './shape-result.js'
 import { config } from '../config.js'
 import { executeTool } from '../capabilities/executor.js'
 
@@ -22,14 +21,10 @@ let _turnSeq = 0
 const pendingTurns = new Map()        // turnId → { resolve, reject, onStream, onToolCall, onToolExecute }
 const toolContextByTurn = new Map()   // turnId → toolContext（工具执行时主进程用它）
 
+// 密钥来源只有 config.apiKey 与环境变量——绝不读磁盘上的临时文件
+// （/tmp 路径世界可读且可被其它本地进程抢占/竞态替换）。
 function getMinimaxCnKey() {
   if (config.provider === 'minimax' && config.apiKey) return config.apiKey
-  try {
-    if (fs.existsSync('/tmp/pi-key')) {
-      const k = fs.readFileSync('/tmp/pi-key', 'utf8').trim()
-      if (k) return k
-    }
-  } catch { /* 忽略 */ }
   return process.env.MINIMAX_API_KEY || process.env.MINIMAX_CN_API_KEY || ''
 }
 
@@ -112,10 +107,8 @@ function onChildMessage(m) {
       break
     case 'end':
       pendingTurns.delete(m.id); toolContextByTurn.delete(m.id)
-      // 与 src/llm.js callLLM 对齐：返回前剥 <think>、协议标记（[MOOD]/[SET_TASK]/...）、
-      // loose internal prelude，保证 response 事件正文干净、用户绝不看到协议标记。
-      // （worker 在系统 node 子进程，无法直接 import markers，故在主进程这一侧统一清洗。）
-      turn.resolve({ content: sanitizeAssistantReplyForDelivery(m.content || ''), toolResult: null, aborted: !!m.aborted, delivered: !!m.delivered })
+      // 与 src/llm.js callLLM 对齐的返回形状（content 清洗 / rawContent 原文），见 shape-result.js。
+      turn.resolve(shapePiTurnResult(m))
       break
     case 'error':
       pendingTurns.delete(m.id); toolContextByTurn.delete(m.id)
@@ -180,14 +173,15 @@ function isWorkerResponsive(child, timeoutMs = 3000) {
   })
 }
 
-// 与 callLLM 同构的回调面；返回 runTurn 读取的 { content, toolResult, aborted, delivered }。
+// 与 callLLM 同构的回调面；返回 runTurn 读取的 { content, rawContent, toolResult, aborted, delivered }
+// （rawContent 为未清洗原文，供 index.js 汇合点 finalizeEngineTurnResult 解析协议标记）。
 export async function runPiTurn({
   systemPrompt, message, messages = null, tools = [], temperature, thinking,
   signal, toolContext = {}, onStream, onToolCall, onToolExecute, onRetry,
   mustReply = false, silentSignal = false, localReply = false,
 } = {}) {
   const apiKey = getMinimaxCnKey()
-  if (!apiKey) throw new Error('[pi] 无 minimax key（config.apiKey / /tmp/pi-key / MINIMAX_API_KEY）')
+  if (!apiKey) throw new Error('[pi] 无 minimax key（config.apiKey / MINIMAX_API_KEY）')
   const modelId = resolveModelId()
   const child = await getChild()
   const id = ++_turnSeq

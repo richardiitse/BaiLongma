@@ -588,10 +588,8 @@ function readLlmProviderConfig(provider) {
 function writeLlmProviderConfig(provider, record) {
   const file = getLlmConfigFile(provider)
   if (!file) throw new Error(`Unsupported provider: "${provider}"`)
-  const tmp = `${file}.tmp`
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(tmp, JSON.stringify(record, null, 2), 'utf-8')
-  fs.renameSync(tmp, file)
+  // 与 config.json / voice 凭据同走统一原子写入器（0600 + tmp+rename）——这里存的是明文 apiKey。
+  writeJsonObjectFile(file, record)
 }
 
 function resolveLlmRecord(raw, fallbackProvider) {
@@ -644,9 +642,9 @@ function resolveStoredLlm(parsed) {
 }
 
 function writeStoredConfig(obj) {
-  const tmp = paths.configFile + '.tmp'
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf-8')
-  fs.renameSync(tmp, paths.configFile)
+  // config.json 含明文 API key，与 voice/llm 凭据 JSON 同走统一原子写入器（0600 + tmp+rename）。
+  // USER_DIR 已在 paths.js import 时 ensureDir 创建，writeJsonObjectFile 的 mkdir 对 configFile 是 no-op。
+  writeJsonObjectFile(paths.configFile, obj)
 }
 
 // 读出 config.json 现有内容（失败返回空对象）。
@@ -757,6 +755,32 @@ function getVoiceProviderConfigFile(provider) {
   return path.join(paths.voiceConfigDir, `${p}.json`)
 }
 
+// 密钥落盘卫生：config.json、voice provider 配置、llm/<provider>.json、seedance.json 都含
+// 明文 API key，历史上以默认 0644 写入过。启动时统一收紧到 0600（best-effort：失败只警告，
+// 不阻断启动）。llm/ 目录用 readdir 枚举而非白名单——与写入器产出的事实集合对齐，
+// 未来新增 provider 文件自动被覆盖，清单与写入器不会漂移。
+function hardenSecretFilePermissions() {
+  const files = [
+    paths.configFile,
+    getVoiceActiveFile(),
+    ...[...VOICE_PROVIDERS].map((p) => getVoiceProviderConfigFile(p)),
+    paths.seedanceConfigFile,
+  ]
+  try {
+    for (const name of fs.readdirSync(paths.llmConfigDir)) {
+      if (name.endsWith('.json')) files.push(path.join(paths.llmConfigDir, name))
+    }
+  } catch { /* 目录不存在（未配置过 provider）则跳过 */ }
+  for (const file of files) {
+    if (!file) continue
+    try {
+      if (fs.existsSync(file)) fs.chmodSync(file, 0o600)
+    } catch (e) {
+      console.warn(`[config] 收紧 ${path.basename(file)} 权限失败: ${e.message}`)
+    }
+  }
+}
+
 function readJsonObjectFile(file) {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'))
@@ -769,7 +793,10 @@ function readJsonObjectFile(file) {
 function writeJsonObjectFile(file, record) {
   const tmp = `${file}.tmp`
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(tmp, JSON.stringify(record, null, 2), 'utf-8')
+  // 凭据 JSON 统一 0600。显式 chmod 兜底：writeFileSync 的 mode 仅在文件创建时生效，
+  // 崩溃残留的旧 0644 .tmp 会被复用并把宽松权限带过 rename（secret-store.js 同款防御）。
+  fs.writeFileSync(tmp, JSON.stringify(record, null, 2), { encoding: 'utf-8', mode: 0o600 })
+  try { fs.chmodSync(tmp, 0o600) } catch { /* 尽力而为 */ }
   fs.renameSync(tmp, file)
 }
 
@@ -1000,6 +1027,7 @@ export const config = {
 
 // 迁移必须在下面读取/加载 config.json 之前跑完，确保后续逻辑看到的是已升级的结构。
 runConfigMigrations()
+hardenSecretFilePermissions()
 
 // 加载顺序刻意分块容错：先无条件吃下 temperature / security 等"兄弟字段"，
 // 再单独判断 LLM 块能否激活。这样即便 LLM 块因 provider 改名/缺字段而不可用，
@@ -1482,9 +1510,8 @@ function readSeedanceFile() {
   catch { return {} }
 }
 function writeSeedanceFile(obj) {
-  const tmp = paths.seedanceConfigFile + '.tmp'
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf-8')
-  fs.renameSync(tmp, paths.seedanceConfigFile)
+  // seedance.json 存 Ark apiKey，与其它凭据同标准：统一原子写入器（0600）。
+  writeJsonObjectFile(paths.seedanceConfigFile, obj)
 }
 
 // 一次性迁移：旧版把 seedance 存在 config.json 里。若独立文件尚无、而 config.json 里还有，

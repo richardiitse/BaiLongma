@@ -1837,9 +1837,10 @@ async function playTTSReply(text) {
 }
 
 // ── 流式回复文本工具 ───────────────────────────────────────────────────────────
-// 协议标记（[RECALL:…]/[SET_TASK:…]/[CLEAR_TASK]/[UPDATE_PERSONA:…]）剥离。与后端 markers.js 等价；
+// 协议标记（[RECALL:…]/[SET_TASK:…]/[CLEAR_TASK]/[UPDATE_PERSONA:…]/[MOOD:…]）剥离。
+// 与后端 markers.js 的五种标记等价（MOOD 限单行词表，镜像 MOOD_STRIP，防吞正文）；
 // 流式场景额外把"末尾尚未闭合的标记起始"整段藏起，避免半截标记被显示或念出来（等 ] 到了再放出）。
-const MARKER_STRIP_RE = /\[(?:RECALL:[\s\S]*?|SET_TASK:[\s\S]*?|CLEAR_TASK|UPDATE_PERSONA:[\s\S]*?)\]/g;
+const MARKER_STRIP_RE = /\[(?:RECALL:[\s\S]*?|SET_TASK:[\s\S]*?|CLEAR_TASK|UPDATE_PERSONA:[\s\S]*?|MOOD:[A-Za-z][A-Za-z _-]*?)\]/g;
 function cleanStreamText(raw) {
   let s = String(raw || '').replace(MARKER_STRIP_RE, '');
   const lastOpen = s.lastIndexOf('[');

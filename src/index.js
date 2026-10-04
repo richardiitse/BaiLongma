@@ -50,7 +50,7 @@ import { tryAutoConfigureKey } from './key-auto-config.js'
 import { PRIMARY_USER_ID, formatPresenceForPrompt, normalizeChannel, isExternalChannel, isVoiceChannel } from './identity.js'
 import { truncateToolResultForUI } from './runtime/tool-result-preview.js'
 import { buildLLMMessages } from './runtime/messages.js'
-import { parseMarkers } from './runtime/markers.js'
+import { finalizeEngineTurnResult } from './runtime/markers.js'
 import { createConsciousnessLoop } from './runtime/consciousness-loop.js'
 import { buildAutonomousTickDirections } from './runtime/tick-policy.js'
 import { buildStrictEvaluationContext, filterStrictEvaluationTools, resolveStrictEvaluationMode } from './runtime/strict-evaluation.js'
@@ -1612,7 +1612,12 @@ async function runTurn(input, label, msg = null) {
     return
   }
 
-  const response = llmResult.content
+  // 汇合点收口（单一权威）：所有 turn 引擎（callLLM / runPiTurn）的输出在这里统一
+  // 「协议标记从 rawContent 解析、交付正文从 content 派生」（markers.js finalizeEngineTurnResult）。
+  // response 事件正文只来自引擎已清洗的 content——标记泄漏不随引擎选择回归；
+  // 协议副作用（RECALL/SET_TASK/UPDATE_PERSONA/MOOD）从未清洗原文解析，不依赖引擎
+  // 返回前恰好保留标记。缺 rawContent 的旧返回形状（中止路径等）优雅降级。
+  const { markers, response } = finalizeEngineTurnResult(llmResult)
 
   // Store tool result for injection on the next TICK
   state.lastToolResult = llmResult.toolResult || null
@@ -1660,8 +1665,7 @@ async function runTurn(input, label, msg = null) {
     }
   }
 
-  // 协议标记解析：单一真相源 src/runtime/markers.js（只解析，副作用留在下方原地）。
-  const markers = parseMarkers(response)
+  // 协议副作用在下方原地执行；markers 来自上方汇合点 finalizeTurnReply。
 
   // 4. Detect [RECALL: ...]
   if (markers.recall !== null) {

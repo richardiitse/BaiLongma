@@ -321,6 +321,7 @@ export async function streamOnce({ messages, toolSchemas, temperature, topP, max
       if (streamStarted) onStream?.({ event: 'end' })
       return {
         content: sanitizeAssistantReplyForDelivery(fullContent),
+        rawContent: fullContent,
         reasoningContent: fullReasoningContent,
         toolCalls: Object.values(toolCallsMap),
         aborted: true
@@ -347,6 +348,7 @@ export async function streamOnce({ messages, toolSchemas, temperature, topP, max
 
   return {
     content: sanitizeAssistantReplyForDelivery(fullContent),
+    rawContent: fullContent,
     reasoningContent: fullReasoningContent,
     toolCalls: Object.values(toolCallsMap),
     aborted: false
@@ -965,6 +967,10 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   })
 
   let allContent = ''
+  // 原始累积：与 allContent 逐轮镜像，但追加的是引擎未清洗的原文（streamOnce 的 rawContent）。
+  // 仅供 index.js runTurn 汇合点 parseMarkers 解析协议副作用；用户可见正文一律走 content/allContent
+  // （逐轮清洗过，且 loose-prelude 剥离是"文本开头"语义——多轮拼接后整串再洗会漏中段旁白）。
+  let rawAllContent = ''
   // 可挽救草稿：社交渠道第一轮已写出一条完整回复、但还没 send_message 投递时，nudge 会把它从 allContent
   // 挪进 messages 并清空 allContent（期望下一轮包 send_message 重发）。一旦下一轮 provider 卡死/被 watchdog
   // 掐断，allContent 已空、草稿就丢了——「你有意识吗」事故正是如此。这里把草稿原文留一份，
@@ -1061,27 +1067,32 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       }
       throw err
     }
-    const { content, reasoningContent, toolCalls, aborted } = roundResult
+    const { content, rawContent: roundRaw, reasoningContent, toolCalls, aborted } = roundResult
 
     trace.recordRound({ round, inputOffset: roundInputOffset, content, reasoningContent, toolCalls, aborted })
 
     // 跨轮累积 content 时的去重保护：如果新段已经是 allContent 末尾的字面重复，
     // 跳过追加，避免 [Round N: "X"] + [Round N+1: "X"] 拼成 "X\nX"。
     // 这是模型在 nudge 后重复生成时的最后一道防线（主要修复见 finalNudge 分支）。
-    const appendContent = (next) => {
-      if (!next) return
+    // rawNext 与 next 同步追加（去重判定只看清洗后文本，两侧一致跳过）；运行时合成串
+    // （nudge ack 等）无标记，raw 默认取 next。纯标记轮（sanitize 后为空）也会把原文
+    // 累积进 rawAllContent——协议副作用不因"正文恰好被剥空"而丢失。
+    const appendContent = (next, rawNext = next) => {
+      if (!next && !rawNext) return
       const trimmed = String(next).trim()
-      if (!trimmed) return
-      if (allContent && allContent.trim().endsWith(trimmed)) return
-      allContent += (allContent ? '\n' : '') + next
+      const rawTrimmed = String(rawNext).trim()
+      if (!trimmed && !rawTrimmed) return
+      if (trimmed && allContent && allContent.trim().endsWith(trimmed)) return
+      if (trimmed) allContent += (allContent ? '\n' : '') + next
+      if (rawTrimmed) rawAllContent += (rawAllContent ? '\n' : '') + rawNext
     }
 
     if (aborted) {
-      appendContent(content)
+      appendContent(content, roundRaw)
       break
     }
 
-    appendContent(content)
+    appendContent(content, roundRaw)
 
     // 若无 JSON 工具调用，尝试从内容中解析 XML 格式工具调用（MiniMax 备用格式）
     let effectiveToolCalls = toolCalls
@@ -1092,6 +1103,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         effectiveToolCalls = xmlCalls
         // 从 allContent 中去掉 XML 调用块，避免污染 response
         allContent = allContent.replace(/<invoke[\s\S]*?<\/invoke>/g, '').trim()
+        rawAllContent = rawAllContent.replace(/<invoke[\s\S]*?<\/invoke>/g, '').trim()
       }
     }
 
@@ -1107,6 +1119,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           const draft = allContent.trim()
           if (content) messages.push({ role: 'assistant', content })
           allContent = ''
+          rawAllContent = ''
           actionContractNudgeCount += 1
           messages.push({
             role: 'user',
@@ -1118,6 +1131,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         // The provider kept declining to issue an action call. Do not release
         // its completion-sounding draft as if it were a result.
         allContent = `我还没有完成「${actionContract.label}」：本轮没有发起所需的实际操作。`
+        rawAllContent = allContent
         break
       }
 
@@ -1127,6 +1141,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           && containsUnsupportedCompletionClaim(allContent) && !actionClaimNudgeUsed) {
         if (content) messages.push({ role: 'assistant', content })
         allContent = ''
+        rawAllContent = ''
         actionClaimNudgeUsed = true
         messages.push({
           role: 'user',
@@ -1150,6 +1165,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         salvageableReply = draft   // 清空 allContent 前留一份，供下一轮失败时兜底投递
         if (content) messages.push({ role: 'assistant', content })
         allContent = ''
+        rawAllContent = ''
         messages.push({
           role: 'user',
           content: `You produced reply text but did NOT call the send_message tool. Plain assistant text in this runtime is only debug exhaust — it does not reach the user through the normal channel. To actually deliver the reply you must wrap it in a send_message tool call.\n\nYour draft was:\n"""\n${draft.slice(0, 1000)}\n"""\n\nCall send_message now with target_id = the user who sent the previous message and content = the same text (or a tightened version). Do not write more prose this turn — only invoke the tool.${INTERNAL_NUDGE_SUFFIX}`,
@@ -1175,6 +1191,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         // 同时清空 allContent，避免本轮的旁白和下一轮的回复被拼起来当一条消息发出。
         if (content) messages.push({ role: 'assistant', content })
         allContent = ''
+        rawAllContent = ''
         messages.push({
           role: 'user',
           content: `Tool results have returned, but you have not given the user a final reply yet. Based on the available tool results, ${deliverInstruction}. If information is insufficient, explain what was found, the failure source, and the limitations; do not end silently.${localReply ? '' : ' Do NOT repeat what you just wrote in plain text — wrap your reply in a send_message call.'}${INTERNAL_NUDGE_SUFFIX}`,
@@ -1677,10 +1694,12 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   }
 
   trace.end({ messages, delivered, aborted })
-  // 工具循环路径返回的 allContent 未经清洗（正常结束路径 323/349 已各自 sanitize）。
-  // 统一补一次：剥 <think>、协议标记（[MOOD]/[SET_TASK]/...）、loose internal prelude，
-  // 保证 response 事件正文与正常路径一致、用户绝不看到协议标记。
-  return { content: sanitizeAssistantReplyForDelivery(allContent), toolResult: lastToolResult, aborted, delivered }
+  // content 统一清洗（剥 <think>、协议标记、loose internal prelude），保证只读 content 的
+  // 调用方（识别器/整理器等后台人格）拿到的正文与流式路径一致。
+  // rawContent 是逐轮镜像累积的【未清洗原文】（streamOnce 的 rawContent，见上方 rawAllContent）：
+  // 仅供 index.js runTurn 汇合点解析协议副作用（[MOOD]/[RECALL]/...），绝不直接交付——
+  // 曾因引擎返回前剥标记让协议静默失效，勿再从 allContent（已清洗）取值。
+  return { content: sanitizeAssistantReplyForDelivery(allContent), rawContent: rawAllContent || allContent, toolResult: lastToolResult, aborted, delivered }
   } finally {
     // 异常 / abort / 任何提前退出路径的兜底收尾（end 内部幂等，正常路径已 end 过则无副作用）。
     trace.end({ messages, delivered, aborted: signal?.aborted })

@@ -143,6 +143,40 @@ export function sanitizeAssistantReplyForDelivery(text) {
   return stripLooseThinkingPrelude(stripMarkers(text))
 }
 
+/**
+ * 汇合点收口：对引擎返回的原始正文「先解析协议标记、再清洗交付正文」。
+ * index.js runTurn 对所有 turn 引擎（callLLM / runPiTurn）统一调用本函数：
+ *   - response 事件正文只可能来自 sanitize 后的返回值 —— 标记泄漏
+ *     （docs/solutions/logic-errors/llm-reply-protocol-markers-leaked-into-response-event.md）
+ *     从结构上不随引擎选择回归；
+ *   - 协议副作用（RECALL/SET_TASK/CLEAR_TASK/UPDATE_PERSONA/MOOD）从 rawContent 解析，
+ *     不再依赖「引擎返回前恰好保留标记」这一约定（曾因引擎自行 sanitize 而静默失效）。
+ * @param {string} rawContent 引擎的原始输出（未经清洗）
+ * @returns {{ markers: ReturnType<parseMarkers>, response: string }}
+ */
+export function finalizeTurnReply(rawContent) {
+  const raw = String(rawContent || '')
+  return {
+    markers: parseMarkers(raw),
+    response: sanitizeAssistantReplyForDelivery(raw),
+  }
+}
+
+/**
+ * 汇合点入口（引擎返回形状）：markers 从 rawContent（未清洗原文）解析；response 从
+ * content（引擎已逐轮清洗）派生。response 绝不从 raw 派生——loose-prelude 剥离是
+ * "文本开头"语义，多轮拼接的原文整串再洗会漏掉中段旁白；content 的逐轮清洗恰好正确。
+ * 缺 rawContent 的旧形状（中止路径 / 占位返回）回退解析 content（已清洗 → 解析不出
+ * 标记，优雅降级，与历史行为一致）。
+ * @param {{ content?: string, rawContent?: string }} llmResult
+ * @returns {{ markers: ReturnType<parseMarkers>, response: string }}
+ */
+export function finalizeEngineTurnResult(llmResult) {
+  const markers = parseMarkers(String(llmResult?.rawContent ?? llmResult?.content ?? ''))
+  const response = sanitizeAssistantReplyForDelivery(llmResult?.content ?? '')
+  return { markers, response }
+}
+
 export function createAssistantReplyStreamSanitizer() {
   let buffer = ''
   let passthrough = false
